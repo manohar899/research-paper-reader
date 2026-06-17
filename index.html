@@ -1,0 +1,760 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Research Paper Audio Reader</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, -apple-system, sans-serif; background: #f3f4f6; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ── Header ── */
+header { background: #1e1b4b; color: #fff; padding: 12px 20px; flex-shrink: 0; }
+header h1 { font-size: 1rem; font-weight: 700; }
+header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
+
+/* ── Layout ── */
+.layout { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Left panel ── */
+.panel {
+  width: 280px; min-width: 240px; background: #fff;
+  border-right: 1px solid #e5e7eb; padding: 14px 14px 16px;
+  overflow-y: auto; display: flex; flex-direction: column; gap: 11px;
+  flex-shrink: 0;
+}
+.field-label { font-size: 0.75rem; font-weight: 700; color: #374151; display: block; margin-bottom: 3px; }
+
+/* Drop zone */
+.drop-zone {
+  border: 2px dashed #c7d2fe; border-radius: 8px; padding: 16px 12px;
+  text-align: center; cursor: pointer; color: #6b7280; font-size: 0.8rem;
+  transition: border-color .2s, background .2s;
+}
+.drop-zone:hover    { border-color: #6366f1; background: #eef2ff; color: #4338ca; }
+.drop-zone.over     { border-color: #6366f1; background: #eef2ff; }
+.drop-zone.loaded   { border-color: #10b981; background: #f0fdf4; color: #065f46; }
+
+/* Page range */
+.two-col { display: flex; gap: 8px; }
+.two-col > div { flex: 1; }
+.ctrl-input {
+  width: 100%; padding: 6px 8px;
+  border: 1px solid #d1d5db; border-radius: 6px;
+  font-size: 0.85rem; color: #111827;
+}
+.ctrl-input:focus { outline: 2px solid #6366f1; border-color: transparent; }
+
+/* Select */
+select.ctrl-input { background: #fff; }
+
+/* Speed row */
+.speed-row { display: flex; align-items: center; gap: 8px; }
+.speed-row input[type=range] { flex: 1; accent-color: #6366f1; }
+.speed-val { font-size: 0.78rem; color: #6b7280; min-width: 32px; text-align: right; }
+
+/* Checkbox row */
+.check-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.check-row input { width: 15px; height: 15px; accent-color: #6366f1; cursor: pointer; }
+.check-row span  { font-size: 0.8rem; color: #374151; }
+
+/* Model progress */
+#model-wrap { display: none; }
+.prog-label  { font-size: 0.72rem; color: #6b7280; margin-bottom: 4px; }
+.prog-bar    { height: 4px; background: #e5e7eb; border-radius: 2px; overflow: hidden; }
+.prog-fill   { height: 100%; width: 0; background: #6366f1; transition: width .25s; }
+
+/* Buttons */
+.btn-row { display: flex; gap: 7px; }
+.btn {
+  flex: 1; padding: 9px 10px; border: none; border-radius: 7px;
+  font-size: 0.82rem; font-weight: 700; cursor: pointer; transition: opacity .15s, background .15s;
+}
+.btn:disabled { opacity: .38; cursor: not-allowed; }
+.btn-primary   { background: #4f46e5; color: #fff; }
+.btn-primary:not(:disabled):hover   { background: #4338ca; }
+.btn-secondary { background: #e5e7eb; color: #374151; }
+.btn-secondary:not(:disabled):hover { background: #d1d5db; }
+#btn-stop { margin-top: -3px; }
+
+/* Status box */
+#status {
+  font-size: 0.76rem; color: #6b7280; background: #f9fafb;
+  border: 1px solid #e5e7eb; border-radius: 6px;
+  padding: 8px 10px; min-height: 38px; line-height: 1.5;
+}
+#status.ok  { color: #15803d; }
+#status.err { color: #dc2626; }
+
+/* ── PDF viewer ── */
+.viewer {
+  flex: 1; overflow-y: auto; background: #4b5563; padding: 14px 12px;
+}
+.viewer-placeholder {
+  height: 100%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 10px; color: #9ca3af;
+}
+.viewer-placeholder svg { opacity: .5; }
+.viewer-placeholder p   { font-size: 0.82rem; }
+.viewer-placeholder small { font-size: 0.72rem; opacity: .7; }
+
+/* PDF page */
+.pdf-page {
+  position: relative; margin: 0 auto 12px; max-width: 860px;
+  background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,.5); cursor: pointer;
+}
+.pdf-page canvas { display: block; width: 100%; height: auto; pointer-events: none; }
+
+/* Highlight overlay */
+#pdf-hl {
+  position: absolute; pointer-events: none; z-index: 10;
+  border: 2px solid #f59e0b; background: rgba(251,191,36,.2);
+  border-radius: 3px; box-shadow: 0 0 0 1px rgba(245,158,11,.35);
+  transition: opacity .15s;
+}
+
+/* Mobile */
+@media (max-width: 680px) {
+  .layout    { flex-direction: column; }
+  .panel     { width: 100%; max-height: 44vh; border-right: none; border-bottom: 1px solid #e5e7eb; }
+  .viewer    { flex: 1; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Research Paper Audio Reader</h1>
+  <p>Runs entirely in your browser · PDF renders as-is · yellow highlight follows the paragraph being read</p>
+</header>
+
+<div class="layout">
+
+  <!-- ── Controls ── -->
+  <aside class="panel">
+
+    <div>
+      <label class="field-label">PDF File</label>
+      <div class="drop-zone" id="drop-zone">
+        <input type="file" id="file-input" accept=".pdf" style="display:none">
+        Drop PDF here or <strong>click to browse</strong>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div>
+        <label class="field-label" for="from-page">From page</label>
+        <input class="ctrl-input" type="number" id="from-page" value="1" min="1">
+      </div>
+      <div>
+        <label class="field-label" for="to-page">To page</label>
+        <input class="ctrl-input" type="number" id="to-page"   value="1" min="1">
+      </div>
+    </div>
+
+    <div>
+      <label class="field-label" for="voice-sel">Voice</label>
+      <select class="ctrl-input" id="voice-sel"></select>
+    </div>
+
+    <div>
+      <label class="field-label">Speed</label>
+      <div class="speed-row">
+        <input type="range" id="speed" min="0.5" max="2.0" step="0.1" value="1.1">
+        <span class="speed-val" id="speed-val">1.1×</span>
+      </div>
+    </div>
+
+    <label class="check-row">
+      <input type="checkbox" id="skip-refs" checked>
+      <span>Skip References / Bibliography</span>
+    </label>
+
+    <div id="model-wrap">
+      <div class="prog-label" id="model-label">Downloading TTS model…</div>
+      <div class="prog-bar"><div class="prog-fill" id="prog-fill"></div></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary"   id="btn-start" disabled>▶ Start</button>
+      <button class="btn btn-primary"   id="btn-pause" disabled>⏸ Pause</button>
+    </div>
+    <button class="btn btn-secondary" id="btn-stop" disabled>⏹ Stop</button>
+
+    <div id="status">Upload a PDF to begin.</div>
+
+  </aside>
+
+  <!-- ── Viewer ── -->
+  <main class="viewer" id="viewer">
+    <div class="viewer-placeholder" id="placeholder">
+      <svg width="52" height="52" fill="none" stroke="currentColor" stroke-width="1.4" viewBox="0 0 24 24">
+        <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+      </svg>
+      <p>Your paper will appear here</p>
+      <small>Click any paragraph to jump to that point</small>
+    </div>
+  </main>
+
+</div>
+
+<script type="module">
+// ─────────────────────────────────────────────────────────────────────────────
+// Imports
+// ─────────────────────────────────────────────────────────────────────────────
+import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Voices
+// ─────────────────────────────────────────────────────────────────────────────
+const VOICES = [
+  ['Bella — US Female',    'af_bella'],
+  ['Heart — US Female',    'af_heart'],
+  ['Sarah — US Female',    'af_sarah'],
+  ['Nicole — US Female',   'af_nicole'],
+  ['Sky — US Female',      'af_sky'],
+  ['Adam — US Male',       'am_adam'],
+  ['Michael — US Male',    'am_michael'],
+  ['Puck — US Male',       'am_puck'],
+  ['Emma — UK Female',     'bf_emma'],
+  ['Isabella — UK Female', 'bf_isabella'],
+  ['George — UK Male',     'bm_george'],
+  ['Lewis — UK Male',      'bm_lewis'],
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Text cleaning  (JS port of the Python functions)
+// ─────────────────────────────────────────────────────────────────────────────
+const MATH_MAP = {
+  'α':'alpha','β':'beta','γ':'gamma','δ':'delta','ε':'epsilon','ζ':'zeta',
+  'η':'eta','θ':'theta','ι':'iota','κ':'kappa','λ':'lambda','μ':'mu',
+  'ν':'nu','ξ':'xi','ο':'omicron','π':'pi','ρ':'rho','σ':'sigma',
+  'τ':'tau','υ':'upsilon','φ':'phi','χ':'chi','ψ':'psi','ω':'omega',
+  'Α':'Alpha','Β':'Beta','Γ':'Gamma','Δ':'Delta','Ε':'Epsilon','Ζ':'Zeta',
+  'Η':'Eta','Θ':'Theta','Ι':'Iota','Κ':'Kappa','Λ':'Lambda','Μ':'Mu',
+  'Ν':'Nu','Ξ':'Xi','Ο':'Omicron','Π':'Pi','Ρ':'Rho','Σ':'Sigma',
+  'Τ':'Tau','Υ':'Upsilon','Φ':'Phi','Χ':'Chi','Ψ':'Psi','Ω':'Omega',
+  '∇':'nabla','∂':'partial','∑':'sum','∏':'product','∫':'integral',
+  '∈':'in','∉':'not in','∀':'for all','∃':'there exists',
+  '∩':'intersection','∪':'union','⊂':'subset of','⊆':'subset of or equal to',
+  '≤':'less than or equal to','≥':'greater than or equal to',
+  '≠':'not equal to','≈':'approximately equal to',
+  '→':'arrow','←':'left arrow','↔':'double arrow',
+  '×':'times','÷':'divided by','±':'plus or minus','∞':'infinity','√':'square root of',
+};
+
+const SECTION_NAMES = [
+  'Abstract','Introduction','Background','Motivation','Related Work',
+  'Literature Review','Methodology','Methods','Method','Approach','Framework',
+  'Experiments','Experiment','Experimental Setup','Evaluation',
+  'Results','Result','Analysis','Discussion',
+  'Conclusion','Conclusions','Future Work','Limitations',
+  'Acknowledgements','Acknowledgement','Appendix',
+];
+const SECTION_RE        = new RegExp('^(' + SECTION_NAMES.join('|') + ')$', 'im');
+const NUMBERED_SEC_RE   = /^(\d+(?:\.\d+)*\.?\s+[A-Z][A-Za-z ,\-:]{2,60})$/m;
+const REFS_HEADER_RE    = /^(?:References|Bibliography|Works Cited|REFERENCES|BIBLIOGRAPHY|\d+\.\s+(?:References|Bibliography))\s*$/m;
+
+const cleanCitations = t => t
+  .replace(/\[[\d][,\d\s\-–]*\]/g, '')
+  .replace(/\([A-Z][a-z]+(?: et al\.?,?| and [A-Z][a-z]+,?|,) \d{4}[a-z]?\)/g, '')
+  .replace(/[A-Z][a-z]+(?: et al\.?)? \((\d{4}[a-z]?)\)/g, '($1)');
+
+const cleanUrls = t => t
+  .replace(/https?:\/\/\S+/g, 'link')
+  .replace(/www\.\S+/g, 'link')
+  .replace(/\bdoi:\s*10\.\d+\/\S+/gi, 'reference link')
+  .replace(/arXiv:\s*\d{4}\.\d+(?:v\d+)?/gi, 'preprint');
+
+const cleanMath = t => Object.entries(MATH_MAP)
+  .reduce((s, [sym, spoken]) => s.replaceAll(sym, ` ${spoken} `), t);
+
+const announceSections = t => t
+  .replace(NUMBERED_SEC_RE, 'Section $1.')
+  .replace(SECTION_RE,       'Section $1.');
+
+const dropEquationLines = t => t
+  .split('\n')
+  .map(line => {
+    const s = line.trim();
+    if (!s) return line;
+    if (/^\d{1,4}$/.test(s)) return '';
+    const alpha = [...s].filter(c => /[a-zA-Z\s]/.test(c)).length / s.length;
+    return (s.length > 6 && alpha < 0.35) ? 'Equation.' : line;
+  })
+  .join('\n')
+  .replace(/(Equation\.\s*){2,}/g, 'Equation. ');
+
+const cleanFigRefs = t => t.replace(/\bFig(?:ure)?\.?\s+(\d+)/gi, 'Figure $1');
+
+function cleanBlock(t) {
+  t = t.replace(/-\n/g, '');
+  t = cleanUrls(t);
+  t = cleanCitations(t);
+  t = announceSections(t);
+  t = cleanMath(t);
+  t = cleanFigRefs(t);
+  t = dropEquationLines(t);
+  return t.replace(/[ \t]+/g, ' ').trim();
+}
+
+function splitChunks(text, max = 400) {
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  const out = [];
+  let cur = '';
+  for (let s of sentences) {
+    s = s.trim();
+    if (!s) continue;
+    if (cur.length + s.length + 1 <= max) {
+      cur = cur ? cur + ' ' + s : s;
+    } else {
+      if (cur) out.push(cur);
+      cur = s.length > max
+        ? s.split(/(?<=[,;])\s+/).reduce((acc, p) => {
+            if (acc.length + p.length + 1 <= max) return acc ? acc + ' ' + p : p;
+            if (acc) out.push(acc);
+            return p;
+          }, '')
+        : s;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PDF processing  (render + extract text blocks with normalised bboxes)
+// ─────────────────────────────────────────────────────────────────────────────
+const RENDER_SCALE = 1.5;
+
+// Returns true if two lines share enough horizontal extent to be same column
+function sameColumn(lineA, lineB) {
+  const a0 = Math.min(...lineA.map(w => w.x0)), a1 = Math.max(...lineA.map(w => w.x1));
+  const b0 = Math.min(...lineB.map(w => w.x0)), b1 = Math.max(...lineB.map(w => w.x1));
+  const overlap = Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+  return overlap / Math.min(a1 - a0, b1 - b0) > 0.15;
+}
+
+async function renderAndExtract(pdfPage) {
+  const viewport = pdfPage.getViewport({ scale: RENDER_SCALE });
+  const pdfW = pdfPage.view[2], pdfH = pdfPage.view[3];
+
+  // Render to canvas
+  const canvas = document.createElement('canvas');
+  canvas.width  = viewport.width;
+  canvas.height = viewport.height;
+  await pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+
+  // Extract text items
+  const content = await pdfPage.getTextContent();
+  const words = content.items
+    .filter(it => it.str && it.str.trim())
+    .map(it => {
+      const x = it.transform[4];
+      const y = it.transform[5];
+      // height: use item.height, fall back to font size from transform matrix
+      const h = Math.abs(it.height) || Math.abs(it.transform[0]) || 10;
+      const w = Math.abs(it.width)  || 4;
+      return {
+        text: it.str,
+        x0:   x / pdfW,
+        y0:   1 - (y + h) / pdfH,   // flip: PDF y goes up, we want top-origin
+        x1:   (x + w) / pdfW,
+        y1:   1 - y / pdfH,
+      };
+    })
+    .filter(w => w.y0 >= 0 && w.y1 <= 1.01);  // discard items outside page bounds
+
+  if (!words.length) return { canvas, blocks: [] };
+
+  // Sort top→bottom, left→right
+  words.sort((a, b) => a.y0 - b.y0 || a.x0 - b.x0);
+
+  // Group words → lines (same vertical band)
+  const lines = [];
+  let line = [words[0]];
+  for (let i = 1; i < words.length; i++) {
+    const prev = words[i - 1], cur = words[i];
+    const lineH = Math.max(prev.y1 - prev.y0, 0.005);
+    if (Math.abs(cur.y0 - prev.y0) < lineH * 0.85) {
+      line.push(cur);
+    } else {
+      lines.push(line);
+      line = [cur];
+    }
+  }
+  if (line.length) lines.push(line);
+
+  // Group lines → paragraphs (small gap + same column)
+  const paras = [];
+  let para = [lines[0]];
+  for (let i = 1; i < lines.length; i++) {
+    const prevLine  = para[para.length - 1];
+    const prevBot   = Math.max(...prevLine.map(w => w.y1));
+    const curTop    = Math.min(...lines[i].map(w => w.y0));
+    const lineH     = prevBot - Math.min(...prevLine.map(w => w.y0));
+    const smallGap  = curTop - prevBot < lineH * 1.9;
+    const sameCols  = sameColumn(prevLine, lines[i]);
+    if (smallGap && sameCols) {
+      para.push(lines[i]);
+    } else {
+      paras.push(para);
+      para = [lines[i]];
+    }
+  }
+  paras.push(para);
+
+  // Convert paragraphs → blocks
+  const blocks = paras.map(p => {
+    const all  = p.flat();
+    const text = p.map(l => l.map(w => w.text).join(' ')).join(' ');
+    return {
+      text,
+      bx0: +Math.min(...all.map(w => w.x0)).toFixed(4),
+      by0: +Math.min(...all.map(w => w.y0)).toFixed(4),
+      bx1: +Math.max(...all.map(w => w.x1)).toFixed(4),
+      by1: +Math.max(...all.map(w => w.y1)).toFixed(4),
+    };
+  }).filter(b => b.text.trim() && b.bx1 > b.bx0 && b.by1 > b.by0);
+
+  return { canvas, blocks };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TTS  (kokoro-js, downloaded from HuggingFace on first use, then cached)
+// ─────────────────────────────────────────────────────────────────────────────
+let _tts      = null;
+let _audioCtx = null;
+
+function audioCtx() {
+  if (!_audioCtx || _audioCtx.state === 'closed') _audioCtx = new AudioContext();
+  if (_audioCtx.state === 'suspended') _audioCtx.resume();
+  return _audioCtx;
+}
+
+async function loadTTS(onProgress) {
+  if (_tts) return _tts;
+  const { KokoroTTS } = await import('https://esm.sh/kokoro-js@1.2.0');
+  _tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0', {
+    dtype: 'q8',
+    progress_callback: onProgress,
+  });
+  return _tts;
+}
+
+async function synthAudio(text, voice, speed) {
+  const tts = await loadTTS();
+  return tts.generate(text, { voice, speed });   // → {audio: Float32Array, sampling_rate}
+}
+
+function playResult(result) {
+  return new Promise((resolve) => {
+    const ctx = audioCtx();
+    const buf = ctx.createBuffer(1, result.audio.length, result.sampling_rate);
+    buf.copyToChannel(result.audio, 0);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.onended = resolve;
+    src.start();
+    window._ttsSrc = src;
+  });
+}
+
+function stopCurrentAudio() {
+  if (window._ttsSrc) { try { window._ttsSrc.stop(); } catch (_) {} window._ttsSrc = null; }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// App state
+// ─────────────────────────────────────────────────────────────────────────────
+let _chunks = [];     // [{text, page, bx0, by0, bx1, by1}]
+let _active = false;
+let _paused = false;
+let _curIdx = 0;
+let _resumeFn = null;
+let _pdfBuf = null;
+let _pdfClickOff = null;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Highlight
+// ─────────────────────────────────────────────────────────────────────────────
+function showHL(i) {
+  const c = _chunks[i];
+  if (!c) return;
+  const pageEl = document.querySelector(`.pdf-page[data-page="${c.page}"]`);
+  if (!pageEl) return;
+  const canvas = pageEl.querySelector('canvas');
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+
+  let hl = document.getElementById('pdf-hl');
+  if (!hl) { hl = document.createElement('div'); hl.id = 'pdf-hl'; }
+  pageEl.appendChild(hl);
+  hl.style.cssText =
+    `left:${c.bx0*w}px;top:${c.by0*h}px;` +
+    `width:${(c.bx1-c.bx0)*w}px;height:${(c.by1-c.by0)*h}px;` +
+    'display:block;';
+  hl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function removeHL() { document.getElementById('pdf-hl')?.remove(); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Playback engine  (prefetch next chunk while current plays)
+// ─────────────────────────────────────────────────────────────────────────────
+async function startFrom(idx) {
+  _active = false;
+  _paused = false;
+  _resumeFn = null;
+  stopCurrentAudio();
+
+  if (!_chunks.length || idx >= _chunks.length) return;
+
+  const voice = document.getElementById('voice-sel').value;
+  const speed = parseFloat(document.getElementById('speed').value);
+
+  _active = true;
+  _curIdx = idx;
+  setBtns('playing');
+
+  let i = idx;
+  let cur  = synthAudio(_chunks[i].text, voice, speed);
+  let next = i + 1 < _chunks.length ? synthAudio(_chunks[i + 1].text, voice, speed) : Promise.resolve(null);
+
+  const play = async () => {
+    if (!_active || i >= _chunks.length) { removeHL(); setBtns('idle'); return; }
+    _curIdx = i;
+
+    let result;
+    try { result = await cur; } catch (e) { console.error('synth error', e); setBtns('idle'); return; }
+    if (!_active) return;
+
+    showHL(i);
+    await playResult(result);
+    window._ttsSrc = null;
+
+    i++;
+    cur  = next;
+    next = (i + 1 < _chunks.length && _active)
+      ? synthAudio(_chunks[i + 1].text, voice, speed)
+      : Promise.resolve(null);
+
+    if (_paused) { _resumeFn = play; }
+    else         { play(); }
+  };
+
+  play();
+}
+
+function togglePause() {
+  if (!_active) return;
+  if (!_paused) {
+    _paused = true;
+    stopCurrentAudio();     // stop current audio; resume re-synths from _curIdx
+    setBtns('paused');
+  } else {
+    _paused = false;
+    _resumeFn = null;
+    startFrom(_curIdx);     // re-synthesize from where we paused
+    setBtns('playing');
+  }
+}
+
+function stopAll() {
+  _active = false;
+  _paused = false;
+  _resumeFn = null;
+  stopCurrentAudio();
+  removeHL();
+  setBtns('idle');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI helpers
+// ─────────────────────────────────────────────────────────────────────────────
+function setStatus(msg, cls) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = cls || '';
+}
+
+function setBtns(state) {
+  const s = document.getElementById('btn-start');
+  const p = document.getElementById('btn-pause');
+  const x = document.getElementById('btn-stop');
+  if (state === 'playing') {
+    s.disabled = true;   p.disabled = false; p.textContent = '⏸ Pause'; x.disabled = false;
+  } else if (state === 'paused') {
+    s.disabled = true;   p.disabled = false; p.textContent = '▶ Resume'; x.disabled = false;
+  } else {
+    s.disabled = !_chunks.length;
+    p.disabled = true;   x.disabled = true;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PDF preparation  (render pages + build chunk list)
+// ─────────────────────────────────────────────────────────────────────────────
+async function preparePDF() {
+  const skipRefs = document.getElementById('skip-refs').checked;
+  const sp = Math.max(1, parseInt(document.getElementById('from-page').value) || 1);
+  const ep = parseInt(document.getElementById('to-page').value) || sp;
+
+  const viewer = document.getElementById('viewer');
+  viewer.innerHTML = '';
+  _chunks = [];
+
+  const pdf = await pdfjsLib.getDocument({ data: _pdfBuf.slice() }).promise;
+  const epClamped = Math.min(ep, pdf.numPages);
+  let refFound = false;
+
+  for (let pn = sp; pn <= epClamped && !refFound; pn++) {
+    const pdfPage = await pdf.getPage(pn);
+    const { canvas, blocks } = await renderAndExtract(pdfPage);
+    const relIdx = pn - sp;
+
+    const pageEl = document.createElement('div');
+    pageEl.className = 'pdf-page';
+    pageEl.dataset.page = String(relIdx);
+    pageEl.title = 'Click to start reading from here';
+    pageEl.appendChild(canvas);
+    viewer.appendChild(pageEl);
+
+    for (const block of blocks) {
+      if (skipRefs && REFS_HEADER_RE.test(block.text.trim())) { refFound = true; break; }
+      const cleaned = cleanBlock(block.text);
+      if (!cleaned) continue;
+      for (const txt of splitChunks(cleaned)) {
+        if (txt.trim()) _chunks.push({ text: txt, page: relIdx, bx0: block.bx0, by0: block.by0, bx1: block.bx1, by1: block.by1 });
+      }
+    }
+  }
+
+  // Click-to-seek
+  if (_pdfClickOff) { _pdfClickOff(); _pdfClickOff = null; }
+  const handler = e => {
+    if (e.target?.id === 'pdf-hl') return;
+    const pageEl = e.target?.closest('.pdf-page');
+    if (!pageEl) return;
+    const pi  = parseInt(pageEl.dataset.page, 10);
+    const cvs = pageEl.querySelector('canvas');
+    const rc  = cvs.getBoundingClientRect();
+    const cx  = (e.clientX - rc.left) / rc.width;
+    const cy  = (e.clientY - rc.top)  / rc.height;
+
+    let bestIdx = -1, bestDist = Infinity;
+    for (let i = 0; i < _chunks.length; i++) {
+      const c = _chunks[i];
+      if (c.page !== pi) continue;
+      if (cx >= c.bx0 && cx <= c.bx1 && cy >= c.by0 && cy <= c.by1) { bestIdx = i; break; }
+      const d = Math.abs(cy - (c.by0+c.by1)/2)*3 + Math.abs(cx - (c.bx0+c.bx1)/2);
+      if (d < bestDist) { bestDist = d; bestIdx = i; }
+    }
+    if (bestIdx >= 0) startFrom(bestIdx);
+  };
+  viewer.addEventListener('click', handler);
+  _pdfClickOff = () => viewer.removeEventListener('click', handler);
+
+  const refNote = refFound ? ' (references skipped)' : '';
+  setStatus(`${_chunks.length} segments · pages ${sp}–${epClamped}${refNote}. Click Start or any paragraph.`, 'ok');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Initialisation
+// ─────────────────────────────────────────────────────────────────────────────
+(function init() {
+
+  // Populate voice select
+  const sel = document.getElementById('voice-sel');
+  VOICES.forEach(([label, val]) => {
+    const o = document.createElement('option');
+    o.value = val; o.textContent = label; sel.appendChild(o);
+  });
+
+  // Speed knob
+  const speedEl = document.getElementById('speed');
+  speedEl.addEventListener('input', () => {
+    document.getElementById('speed-val').textContent = (+speedEl.value).toFixed(1) + '×';
+  });
+
+  // File handling
+  const zone  = document.getElementById('drop-zone');
+  const finput = document.getElementById('file-input');
+  zone.addEventListener('click', () => finput.click());
+  zone.addEventListener('dragover',  e => { e.preventDefault(); zone.classList.add('over'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+  zone.addEventListener('drop', e => {
+    e.preventDefault(); zone.classList.remove('over');
+    const f = e.dataTransfer.files[0];
+    if (f?.type === 'application/pdf') handleFile(f);
+  });
+  finput.addEventListener('change', () => { if (finput.files[0]) handleFile(finput.files[0]); });
+
+  async function handleFile(file) {
+    zone.classList.remove('over');
+    zone.classList.add('loaded');
+    zone.innerHTML = `📄 <strong>${file.name}</strong>`;
+    setStatus('Rendering pages…');
+    document.getElementById('btn-start').disabled = true;
+
+    _pdfBuf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: _pdfBuf.slice() }).promise;
+    document.getElementById('from-page').value = 1;
+    document.getElementById('to-page').value   = pdf.numPages;
+
+    // Render pages immediately so user can read and click before pressing Start
+    try {
+      await preparePDF();
+    } catch(e) {
+      setStatus('Error rendering PDF: ' + e.message, 'err');
+      return;
+    }
+  }
+
+  // Start button — PDF is already rendered; just load TTS and play
+  document.getElementById('btn-start').addEventListener('click', async () => {
+    if (!_pdfBuf) { setStatus('Upload a PDF first.'); return; }
+
+    // If page-range changed since upload, re-render
+    const fromNow = parseInt(document.getElementById('from-page').value);
+    const toNow   = parseInt(document.getElementById('to-page').value);
+    const rendered = document.querySelectorAll('.pdf-page').length;
+    if (!rendered || rendered !== toNow - fromNow + 1) {
+      setStatus('Rendering pages…');
+      try { await preparePDF(); } catch(e) { setStatus('Error: ' + e.message, 'err'); return; }
+    }
+
+    stopAll();
+    document.getElementById('btn-start').disabled = true;
+
+    try {
+      const wrap  = document.getElementById('model-wrap');
+      const fill  = document.getElementById('prog-fill');
+      const label = document.getElementById('model-label');
+      if (!_tts) {
+        wrap.style.display = 'block';
+        setStatus('Downloading TTS model (first run only, ~82 MB)…');
+        await loadTTS(info => {
+          if (info.status === 'progress' && info.total) {
+            fill.style.width = (info.loaded / info.total * 100) + '%';
+            label.textContent = `Model: ${Math.round(info.loaded/1e6)}/${Math.round(info.total/1e6)} MB`;
+          }
+        });
+        wrap.style.display = 'none';
+      }
+      startFrom(0);
+    } catch (err) {
+      setStatus('Error: ' + err.message, 'err');
+      document.getElementById('btn-start').disabled = false;
+    }
+  });
+
+  document.getElementById('btn-pause').addEventListener('click', togglePause);
+  document.getElementById('btn-stop').addEventListener('click', stopAll);
+
+})();
+</script>
+</body>
+</html>
