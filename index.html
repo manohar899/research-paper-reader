@@ -15,13 +15,50 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
 .layout { display: flex; flex: 1; overflow: hidden; }
 
 .panel {
-  width: 280px; min-width: 240px; background: #fff;
+  width: 290px; min-width: 250px; background: #fff;
   border-right: 1px solid #e5e7eb; padding: 14px 14px 16px;
   overflow-y: auto; display: flex; flex-direction: column; gap: 11px;
   flex-shrink: 0;
 }
 .field-label { font-size: 0.75rem; font-weight: 700; color: #374151; display: block; margin-bottom: 3px; }
 
+/* ── token card ── */
+.token-card {
+  background: #fffbeb; border: 1px solid #fcd34d;
+  border-radius: 8px; padding: 11px 12px; display: flex; flex-direction: column; gap: 7px;
+}
+.token-card.hidden { display: none; }
+.token-title { font-size: 0.78rem; font-weight: 700; color: #92400e; }
+.token-steps { font-size: 0.72rem; color: #78350f; line-height: 1.6; }
+.token-steps a { color: #b45309; }
+.token-row { display: flex; gap: 6px; }
+.token-row input {
+  flex: 1; padding: 6px 8px; border: 1px solid #fcd34d; border-radius: 6px;
+  font-size: 0.8rem; background: #fff; font-family: monospace; color: #111827;
+}
+.token-row input:focus { outline: 2px solid #f59e0b; border-color: transparent; }
+.btn-xs {
+  padding: 6px 10px; border: none; border-radius: 6px; cursor: pointer;
+  font-size: 0.78rem; font-weight: 700; white-space: nowrap;
+  background: #f59e0b; color: #fff;
+}
+.btn-xs:hover { background: #d97706; }
+
+.token-ok {
+  font-size: 0.75rem; color: #15803d; background: #f0fdf4;
+  border: 1px solid #bbf7d0; border-radius: 6px; padding: 7px 10px;
+  display: flex; justify-content: space-between; align-items: center;
+}
+.token-ok.hidden { display: none; }
+.token-ok a { color: #15803d; font-size: 0.7rem; }
+
+/* ── progress bar ── */
+.prog-wrap { flex-direction: column; gap: 4px; }
+.prog-bar-outer { height: 6px; background: #e5e7eb; border-radius: 99px; overflow: hidden; }
+.prog-bar-inner { height: 100%; background: #6366f1; border-radius: 99px; transition: width .25s; width: 0%; }
+.prog-label { font-size: 0.7rem; color: #6b7280; }
+
+/* ── drop zone ── */
 .drop-zone {
   border: 2px dashed #c7d2fe; border-radius: 8px; padding: 16px 12px;
   text-align: center; cursor: pointer; color: #6b7280; font-size: 0.8rem;
@@ -67,6 +104,7 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
 #status.ok  { color: #15803d; }
 #status.err { color: #dc2626; }
 
+/* ── viewer ── */
 .viewer { flex: 1; overflow-y: auto; background: #4b5563; padding: 14px 12px; }
 .viewer-placeholder {
   height: 100%; display: flex; flex-direction: column;
@@ -90,7 +128,7 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
 
 @media (max-width: 680px) {
   .layout  { flex-direction: column; }
-  .panel   { width: 100%; max-height: 44vh; border-right: none; border-bottom: 1px solid #e5e7eb; }
+  .panel   { width: 100%; max-height: 52vh; border-right: none; border-bottom: 1px solid #e5e7eb; }
   .viewer  { flex: 1; }
 }
 </style>
@@ -98,12 +136,39 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
 <body>
 
 <header>
-  <h1>Research Paper Audio Reader</h1>
-  <p>Runs entirely in your browser · no downloads · PDF renders as-is · yellow highlight follows the paragraph being read</p>
+  <h1>Research Paper Audio Reader — Kokoro TTS</h1>
+  <p>Runs entirely in your browser · Kokoro neural TTS · PDF renders as-is · yellow highlight follows the paragraph being read</p>
 </header>
 
 <div class="layout">
   <aside class="panel">
+
+    <!-- ── HF token setup ── -->
+    <div class="token-card" id="token-card">
+      <div class="token-title">🔑 One-time Kokoro TTS setup</div>
+      <div class="token-steps">
+        1. <a href="https://huggingface.co/onnx-community/Kokoro-82M-v1.0" target="_blank">Accept model terms</a> (free HF account)<br>
+        2. <a href="https://huggingface.co/settings/tokens" target="_blank">Create a read token</a> at hf.co/settings/tokens<br>
+        3. Paste below — saved in your browser only
+      </div>
+      <div class="token-row">
+        <input type="password" id="hf-token" placeholder="hf_xxxxxxxxxxxxxxxx" autocomplete="off">
+        <button class="btn-xs" id="btn-save-token">Save</button>
+      </div>
+    </div>
+
+    <div class="token-ok hidden" id="token-ok">
+      <span>✓ Kokoro TTS ready</span>
+      <a href="#" id="token-reset">change token</a>
+    </div>
+
+    <!-- ── model download progress ── -->
+    <div class="prog-wrap" id="prog-wrap" style="display:none">
+      <div class="prog-label" id="prog-label">Downloading Kokoro model…</div>
+      <div class="prog-bar-outer"><div class="prog-bar-inner" id="prog-bar"></div></div>
+    </div>
+
+    <!-- ── PDF upload ── -->
     <div>
       <label class="field-label">PDF File</label>
       <div class="drop-zone" id="drop-zone">
@@ -126,7 +191,18 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
     <div>
       <label class="field-label" for="voice-sel">Voice</label>
       <select class="ctrl-input" id="voice-sel">
-        <option value="">Loading voices…</option>
+        <option value="af_bella">Bella — US Female</option>
+        <option value="af_heart">Heart — US Female</option>
+        <option value="af_sarah">Sarah — US Female</option>
+        <option value="af_nicole">Nicole — US Female</option>
+        <option value="af_sky">Sky — US Female</option>
+        <option value="am_adam">Adam — US Male</option>
+        <option value="am_michael">Michael — US Male</option>
+        <option value="am_puck">Puck — US Male</option>
+        <option value="bf_emma">Emma — UK Female</option>
+        <option value="bf_isabella">Isabella — UK Female</option>
+        <option value="bm_george">George — UK Male</option>
+        <option value="bm_lewis">Lewis — UK Male</option>
       </select>
     </div>
 
@@ -149,7 +225,7 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
     </div>
     <button class="btn btn-secondary" id="btn-stop" disabled>⏹ Stop</button>
 
-    <div id="status">Upload a PDF to begin.</div>
+    <div id="status">Set up your HF token above to begin.</div>
   </aside>
 
   <main class="viewer" id="viewer">
@@ -169,38 +245,116 @@ import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs';
 
-// ── Web Speech API voices ─────────────────────────────────────────────────────
-let _voices = [];
+// ── HF env — set access token BEFORE kokoro-js is imported ───────────────────
+import { env } from 'https://esm.sh/@huggingface/transformers@3';
+const savedToken = localStorage.getItem('hf_token') || '';
+if (savedToken) env.accessToken = savedToken;
 
-function loadVoices() {
-  const all = window.speechSynthesis.getVoices();
-  // Prefer English voices; put local (offline) ones first
-  _voices = all
-    .filter(v => v.lang.startsWith('en'))
-    .sort((a, b) => (b.localService ? 1 : 0) - (a.localService ? 1 : 0));
+// ── Kokoro TTS state ──────────────────────────────────────────────────────────
+let KokoroTTS  = null;
+let _tts       = null;
+let _audioCtx  = null;
+let _curSrc    = null;
 
-  if (!_voices.length) _voices = all;   // fallback: show everything
-
-  const sel = document.getElementById('voice-sel');
-  sel.innerHTML = '';
-  _voices.forEach(v => {
-    const o = document.createElement('option');
-    o.value = v.name;
-    o.textContent = v.name + (v.localService ? '' : ' ☁');
-    sel.appendChild(o);
-  });
-
-  // Pick a good default: prefer "Samantha" (macOS) or first US English
-  const preferred = _voices.find(v => v.name === 'Samantha')
-    || _voices.find(v => v.lang === 'en-US' && v.localService)
-    || _voices.find(v => v.lang === 'en-US')
-    || _voices[0];
-  if (preferred) sel.value = preferred.name;
+function audioCtx() {
+  if (!_audioCtx || _audioCtx.state === 'closed') {
+    _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (_audioCtx.state === 'suspended') _audioCtx.resume();
+  return _audioCtx;
 }
 
-// voices may load asynchronously
-window.speechSynthesis.onvoiceschanged = loadVoices;
-loadVoices();
+// ── Token UI ──────────────────────────────────────────────────────────────────
+const tokenCard  = document.getElementById('token-card');
+const tokenOk    = document.getElementById('token-ok');
+const tokenInput = document.getElementById('hf-token');
+const btnSave    = document.getElementById('btn-save-token');
+const tokenReset = document.getElementById('token-reset');
+
+function applyTokenUI(hasToken) {
+  tokenCard.classList.toggle('hidden', hasToken);
+  tokenOk.classList.toggle('hidden', !hasToken);
+  if (!hasToken) setStatus('Set up your HF token above to begin.');
+}
+applyTokenUI(!!savedToken);
+
+btnSave.addEventListener('click', async () => {
+  const t = tokenInput.value.trim();
+  if (!t.startsWith('hf_') || t.length < 10) {
+    setStatus('Token must start with hf_ and be at least 10 chars.', 'err'); return;
+  }
+  localStorage.setItem('hf_token', t);
+  env.accessToken = t;
+  applyTokenUI(true);
+  setStatus('Token saved. Loading Kokoro model in background…');
+  loadTTS().catch(() => {});
+});
+
+tokenReset.addEventListener('click', e => {
+  e.preventDefault();
+  localStorage.removeItem('hf_token');
+  tokenInput.value = '';
+  env.accessToken = '';
+  _tts = null; KokoroTTS = null;
+  applyTokenUI(false);
+});
+
+// ── Load Kokoro (lazy, cached) ────────────────────────────────────────────────
+async function loadTTS() {
+  if (_tts) return _tts;
+
+  if (!localStorage.getItem('hf_token')) {
+    throw new Error('No HuggingFace token — set it up first.');
+  }
+
+  if (!KokoroTTS) {
+    const mod = await import('https://esm.sh/kokoro-js@1.2.0');
+    KokoroTTS = mod.KokoroTTS;
+  }
+
+  const progWrap  = document.getElementById('prog-wrap');
+  const progBar   = document.getElementById('prog-bar');
+  const progLabel = document.getElementById('prog-label');
+  progWrap.style.display = 'flex';
+  setStatus('Downloading Kokoro model (~87 MB, cached after first load)…');
+
+  try {
+    _tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0', {
+      dtype: 'q8',
+      progress_callback: (p) => {
+        if (p.status === 'downloading') {
+          const pct = p.total ? Math.round((p.loaded / p.total) * 100) : 0;
+          const mb  = p.total ? ` (${(p.total/1e6).toFixed(0)} MB)` : '';
+          progBar.style.width  = pct + '%';
+          progLabel.textContent = `Downloading model${mb}: ${pct}%`;
+        } else if (p.status === 'loading') {
+          progBar.style.width  = '100%';
+          progLabel.textContent = 'Loading model into memory…';
+        }
+      },
+    });
+  } catch (e) {
+    progWrap.style.display = 'none';
+    const isAuth = /unauthorized|403|401/i.test(e.message);
+    if (isAuth) {
+      setStatus(
+        'Auth failed. Make sure you accepted model terms at hf.co/onnx-community/Kokoro-82M-v1.0 and your token has read access.',
+        'err'
+      );
+    } else {
+      setStatus('Kokoro load error: ' + e.message, 'err');
+    }
+    throw e;
+  }
+
+  progWrap.style.display = 'none';
+  const ready = _chunks.length
+    ? `${_chunks.length} segments ready. Click ▶ Start or any paragraph.`
+    : 'Kokoro loaded. Upload a PDF to begin.';
+  setStatus(ready, 'ok');
+  setBtns('idle');
+  return _tts;
+}
 
 // ── Text cleaning ─────────────────────────────────────────────────────────────
 const MATH_MAP = {
@@ -220,7 +374,6 @@ const MATH_MAP = {
   '→':'arrow','←':'left arrow','↔':'double arrow',
   '×':'times','÷':'divided by','±':'plus or minus','∞':'infinity','√':'square root of',
 };
-
 const SECTION_NAMES = [
   'Abstract','Introduction','Background','Motivation','Related Work',
   'Literature Review','Methodology','Methods','Method','Approach','Framework',
@@ -245,44 +398,40 @@ const cleanUrls = t => t
   .replace(/arXiv:\s*\d{4}\.\d+(?:v\d+)?/gi, 'preprint');
 
 const cleanMath = t =>
-  Object.entries(MATH_MAP).reduce((s, [sym, w]) => s.replaceAll(sym, ` ${w} `), t);
+  Object.entries(MATH_MAP).reduce((s,[sym,w]) => s.replaceAll(sym, ` ${w} `), t);
 
 const announceSections = t => t
   .replace(NUMBERED_SEC_RE, 'Section $1.')
   .replace(SECTION_RE, 'Section $1.');
 
-const dropEquationLines = t => t
-  .split('\n').map(line => {
-    const s = line.trim();
-    if (!s) return line;
-    if (/^\d{1,4}$/.test(s)) return '';
-    const alpha = [...s].filter(c => /[a-zA-Z\s]/.test(c)).length / s.length;
-    return (s.length > 6 && alpha < 0.35) ? 'Equation.' : line;
-  }).join('\n').replace(/(Equation\.\s*){2,}/g, 'Equation. ');
+const dropEquationLines = t => t.split('\n').map(line => {
+  const s = line.trim();
+  if (!s) return line;
+  if (/^\d{1,4}$/.test(s)) return '';
+  const alpha = [...s].filter(c => /[a-zA-Z\s]/.test(c)).length / s.length;
+  return (s.length > 6 && alpha < 0.35) ? 'Equation.' : line;
+}).join('\n').replace(/(Equation\.\s*){2,}/g, 'Equation. ');
 
 function cleanBlock(t) {
   t = t.replace(/-\n/g, '');
-  t = cleanUrls(t);
-  t = cleanCitations(t);
-  t = announceSections(t);
-  t = cleanMath(t);
+  t = cleanUrls(t); t = cleanCitations(t);
+  t = announceSections(t); t = cleanMath(t);
   t = t.replace(/\bFig(?:ure)?\.?\s+(\d+)/gi, 'Figure $1');
   t = dropEquationLines(t);
   return t.replace(/[ \t]+/g, ' ').trim();
 }
 
-function splitChunks(text, max = 300) {
-  // Web Speech API chunks best at ≤300 chars (avoids Chrome 32-utterance limit)
+function splitChunks(text, max = 400) {
   const sentences = text.split(/(?<=[.!?])\s+/);
   const out = []; let cur = '';
   for (let s of sentences) {
     s = s.trim(); if (!s) continue;
-    if (cur.length + s.length + 1 <= max) { cur = cur ? cur + ' ' + s : s; }
+    if (cur.length + s.length + 1 <= max) { cur = cur ? cur+' '+s : s; }
     else {
       if (cur) out.push(cur);
       cur = s.length > max
-        ? s.split(/(?<=[,;])\s+/).reduce((acc, p) => {
-            if (acc.length + p.length + 1 <= max) return acc ? acc + ' ' + p : p;
+        ? s.split(/(?<=[,;])\s+/).reduce((acc,p) => {
+            if (acc.length+p.length+1 <= max) return acc ? acc+' '+p : p;
             if (acc) out.push(acc); return p;
           }, '')
         : s;
@@ -296,11 +445,11 @@ function splitChunks(text, max = 300) {
 const RENDER_SCALE = 1.5;
 
 function sameColumn(lineA, lineB) {
-  const a0 = Math.min(...lineA.map(w => w.x0)), a1 = Math.max(...lineA.map(w => w.x1));
-  const b0 = Math.min(...lineB.map(w => w.x0)), b1 = Math.max(...lineB.map(w => w.x1));
-  const overlap = Math.max(0, Math.min(a1,b1) - Math.max(a0,b0));
+  const a0 = Math.min(...lineA.map(w=>w.x0)), a1 = Math.max(...lineA.map(w=>w.x1));
+  const b0 = Math.min(...lineB.map(w=>w.x0)), b1 = Math.max(...lineB.map(w=>w.x1));
+  const overlap = Math.max(0, Math.min(a1,b1)-Math.max(a0,b0));
   const minW = Math.min(a1-a0, b1-b0);
-  return minW > 0 && overlap / minW > 0.15;
+  return minW > 0 && overlap/minW > 0.15;
 }
 
 async function renderAndExtract(pdfPage) {
@@ -318,32 +467,30 @@ async function renderAndExtract(pdfPage) {
       const x = it.transform[4], y = it.transform[5];
       const h = Math.abs(it.height) || Math.abs(it.transform[0]) || 10;
       const w = Math.abs(it.width) || 4;
-      return { text: it.str, x0: x/pdfW, y0: 1-(y+h)/pdfH, x1:(x+w)/pdfW, y1:1-y/pdfH };
+      return { text: it.str, x0:x/pdfW, y0:1-(y+h)/pdfH, x1:(x+w)/pdfW, y1:1-y/pdfH };
     })
-    .filter(w => w.y0 >= 0 && w.y1 <= 1.01 && w.x1 > w.x0);
+    .filter(w => w.y0>=0 && w.y1<=1.01 && w.x1>w.x0);
 
   if (!words.length) return { canvas, blocks: [] };
   words.sort((a,b) => a.y0-b.y0 || a.x0-b.x0);
 
-  // words → lines
   const lines = []; let line = [words[0]];
-  for (let i = 1; i < words.length; i++) {
-    const prev = words[i-1], cur = words[i];
+  for (let i=1; i<words.length; i++) {
+    const prev=words[i-1], cur=words[i];
     const lh = Math.max(prev.y1-prev.y0, 0.005);
-    if (Math.abs(cur.y0-prev.y0) < lh*0.85) { line.push(cur); }
-    else { lines.push(line); line = [cur]; }
+    if (Math.abs(cur.y0-prev.y0) < lh*0.85) line.push(cur);
+    else { lines.push(line); line=[cur]; }
   }
   if (line.length) lines.push(line);
 
-  // lines → paragraphs
   const paras = []; let para = [lines[0]];
-  for (let i = 1; i < lines.length; i++) {
+  for (let i=1; i<lines.length; i++) {
     const prev = para[para.length-1];
     const prevBot = Math.max(...prev.map(w=>w.y1));
     const curTop  = Math.min(...lines[i].map(w=>w.y0));
-    const lh      = prevBot - Math.min(...prev.map(w=>w.y0));
-    if (curTop-prevBot < lh*1.9 && sameColumn(prev, lines[i])) { para.push(lines[i]); }
-    else { paras.push(para); para = [lines[i]]; }
+    const lh = prevBot - Math.min(...prev.map(w=>w.y0));
+    if (curTop-prevBot < lh*1.9 && sameColumn(prev, lines[i])) para.push(lines[i]);
+    else { paras.push(para); para=[lines[i]]; }
   }
   paras.push(para);
 
@@ -363,11 +510,11 @@ async function renderAndExtract(pdfPage) {
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
-let _chunks = [];
-let _active = false;
-let _paused = false;
-let _curIdx = 0;
-let _pdfBuf = null;
+let _chunks     = [];
+let _active     = false;
+let _paused     = false;
+let _curIdx     = 0;
+let _pdfBuf     = null;
 let _pdfClickOff = null;
 
 // ── Highlight ─────────────────────────────────────────────────────────────────
@@ -378,68 +525,79 @@ function showHL(i) {
   const cvs = pageEl.querySelector('canvas');
   const w = cvs.clientWidth, h = cvs.clientHeight;
   let hl = document.getElementById('pdf-hl');
-  if (!hl) { hl = document.createElement('div'); hl.id = 'pdf-hl'; }
+  if (!hl) { hl = document.createElement('div'); hl.id='pdf-hl'; }
   pageEl.appendChild(hl);
   Object.assign(hl.style, {
-    left:   c.bx0*w + 'px',
-    top:    c.by0*h + 'px',
-    width:  (c.bx1-c.bx0)*w + 'px',
-    height: (c.by1-c.by0)*h + 'px',
-    display: 'block',
+    left:   c.bx0*w+'px', top:    c.by0*h+'px',
+    width:  (c.bx1-c.bx0)*w+'px', height: (c.by1-c.by0)*h+'px', display:'block',
   });
   hl.scrollIntoView({ behavior:'smooth', block:'center' });
 }
-
 function removeHL() { document.getElementById('pdf-hl')?.remove(); }
 
-// ── Web Speech API playback ───────────────────────────────────────────────────
-function currentVoice() {
-  const name = document.getElementById('voice-sel').value;
-  return _voices.find(v => v.name === name) || null;
+// ── Kokoro synthesis + Web Audio playback ─────────────────────────────────────
+function currentVoice() { return document.getElementById('voice-sel').value; }
+function currentSpeed() { return parseFloat(document.getElementById('speed').value); }
+
+async function synthChunk(text) {
+  const tts = await loadTTS();
+  return tts.generate(text, { voice: currentVoice(), speed: currentSpeed() });
 }
 
-function currentSpeed() {
-  return parseFloat(document.getElementById('speed').value);
+function playResult(result) {
+  return new Promise((resolve, reject) => {
+    const ctx = audioCtx();
+    const buf = ctx.createBuffer(1, result.audio.length, result.sampling_rate);
+    buf.copyToChannel(result.audio, 0);
+    const src = ctx.createBufferSource();
+    src.buffer = buf; src.connect(ctx.destination);
+    src.onended = resolve; src.onerror = reject;
+    src.start();
+    _curSrc = src;
+  });
 }
 
-function speakChunk(text, onEnd) {
-  const utt = new SpeechSynthesisUtterance(text);
-  utt.rate  = currentSpeed();
-  const v   = currentVoice();
-  if (v) utt.voice = v;
-  utt.onend   = onEnd;
-  utt.onerror = e => { if (e.error !== 'interrupted') onEnd(); };
-  window.speechSynthesis.speak(utt);
+function stopCurrentAudio() {
+  if (_curSrc) { try { _curSrc.stop(); } catch(_) {} _curSrc = null; }
 }
 
-function startFrom(idx) {
-  window.speechSynthesis.cancel();
-  if (!_chunks.length || idx >= _chunks.length) return;
+// ── Playback engine with prefetch ─────────────────────────────────────────────
+async function startFrom(idx) {
+  stopCurrentAudio();
   _active = true; _paused = false; _curIdx = idx;
   setBtns('playing');
+  audioCtx(); // unlock on gesture
 
-  // Chrome bug: speechSynthesis silently stops after ~30s of idle.
-  // Kick it with a no-op every 10s to keep it alive.
-  clearInterval(window._synthKeepalive);
-  window._synthKeepalive = setInterval(() => {
-    if (!_active || _paused) return;
-    if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
-      // Synthesis finished unexpectedly — resume from current index
-      if (_curIdx < _chunks.length) playNext();
-    }
-  }, 10000);
+  let curPromise  = synthChunk(_chunks[_curIdx]?.text || '');
+  let nextPromise = (_curIdx+1 < _chunks.length)
+    ? synthChunk(_chunks[_curIdx+1].text) : Promise.resolve(null);
 
-  function playNext() {
+  async function playNext() {
     if (!_active || _curIdx >= _chunks.length) {
-      clearInterval(window._synthKeepalive);
-      removeHL(); setBtns('idle'); return;
+      removeHL(); setBtns('idle');
+      setStatus(`${_chunks.length} segments ready. Click ▶ Start or any paragraph.`, 'ok');
+      return;
     }
+    let result;
+    try { result = await curPromise; }
+    catch(e) {
+      if (_active) { setStatus('Synthesis error: '+e.message, 'err'); setBtns('idle'); }
+      return;
+    }
+    if (!_active) return;
+
     showHL(_curIdx);
-    speakChunk(_chunks[_curIdx].text, () => {
-      if (!_active) return;
-      _curIdx++;
-      if (!_paused) playNext();
-    });
+    setStatus(`Reading ${_curIdx+1} / ${_chunks.length}…`);
+
+    try { await playResult(result); } catch(_) {}
+    if (!_active) return;
+
+    _curIdx++;
+    curPromise  = nextPromise;
+    nextPromise = (_curIdx+1 < _chunks.length && _active)
+      ? synthChunk(_chunks[_curIdx+1].text) : Promise.resolve(null);
+
+    if (!_paused) playNext();
   }
 
   playNext();
@@ -449,38 +607,37 @@ function togglePause() {
   if (!_active) return;
   if (!_paused) {
     _paused = true;
-    window.speechSynthesis.cancel();   // cancel current; resume will restart chunk
-    clearInterval(window._synthKeepalive);
+    stopCurrentAudio();
     setBtns('paused');
   } else {
     _paused = false;
-    startFrom(_curIdx);                // restart from paused chunk
+    startFrom(_curIdx);
   }
 }
 
 function stopAll() {
   _active = false; _paused = false;
-  clearInterval(window._synthKeepalive);
-  window.speechSynthesis.cancel();
+  stopCurrentAudio();
   removeHL(); setBtns('idle');
+  if (_chunks.length) setStatus(`${_chunks.length} segments ready. Click ▶ Start or any paragraph.`, 'ok');
 }
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
 function setStatus(msg, cls) {
   const el = document.getElementById('status');
-  el.textContent = msg; el.className = cls || '';
+  el.textContent = msg; el.className = cls||'';
 }
-
 function setBtns(state) {
-  const s = document.getElementById('btn-start');
-  const p = document.getElementById('btn-pause');
-  const x = document.getElementById('btn-stop');
-  if (state === 'playing') {
-    s.disabled = true;  p.disabled = false; p.textContent = '⏸ Pause'; x.disabled = false;
-  } else if (state === 'paused') {
-    s.disabled = true;  p.disabled = false; p.textContent = '▶ Resume'; x.disabled = false;
+  const s=document.getElementById('btn-start');
+  const p=document.getElementById('btn-pause');
+  const x=document.getElementById('btn-stop');
+  if (state==='playing') {
+    s.disabled=true;  p.disabled=false; p.textContent='⏸ Pause'; x.disabled=false;
+  } else if (state==='paused') {
+    s.disabled=true;  p.disabled=false; p.textContent='▶ Resume'; x.disabled=false;
   } else {
-    s.disabled = !_chunks.length; p.disabled = true; x.disabled = true;
+    s.disabled = !_chunks.length || !localStorage.getItem('hf_token');
+    p.disabled=true; x.disabled=true;
   }
 }
 
@@ -489,67 +646,68 @@ async function preparePDF() {
   const skipRefs = document.getElementById('skip-refs').checked;
   const sp = Math.max(1, parseInt(document.getElementById('from-page').value)||1);
   const ep = parseInt(document.getElementById('to-page').value)||sp;
-
   const viewer = document.getElementById('viewer');
-  viewer.innerHTML = '';
-  _chunks = [];
+  viewer.innerHTML = ''; _chunks = [];
 
   const pdf = await pdfjsLib.getDocument({ data: _pdfBuf.slice() }).promise;
   const epC = Math.min(ep, pdf.numPages);
   let refFound = false;
 
-  for (let pn = sp; pn <= epC && !refFound; pn++) {
+  for (let pn=sp; pn<=epC && !refFound; pn++) {
+    setStatus(`Rendering page ${pn}/${epC}…`);
     const { canvas, blocks } = await renderAndExtract(await pdf.getPage(pn));
-    const rel = pn - sp;
+    const rel = pn-sp;
 
     const pageEl = document.createElement('div');
-    pageEl.className = 'pdf-page';
-    pageEl.dataset.page = String(rel);
-    pageEl.title = 'Click to start reading from here';
+    pageEl.className='pdf-page'; pageEl.dataset.page=String(rel);
+    pageEl.title='Click to start reading from here';
     pageEl.appendChild(canvas);
     viewer.appendChild(pageEl);
 
     for (const block of blocks) {
-      if (skipRefs && REFS_HEADER_RE.test(block.text.trim())) { refFound = true; break; }
+      if (skipRefs && REFS_HEADER_RE.test(block.text.trim())) { refFound=true; break; }
       const cleaned = cleanBlock(block.text);
       if (!cleaned) continue;
       for (const txt of splitChunks(cleaned)) {
-        if (txt.trim()) _chunks.push({ text: txt, page: rel,
-          bx0: block.bx0, by0: block.by0, bx1: block.bx1, by1: block.by1 });
+        if (txt.trim()) _chunks.push({ text:txt, page:rel,
+          bx0:block.bx0, by0:block.by0, bx1:block.bx1, by1:block.by1 });
       }
     }
   }
 
-  // Click-to-seek
-  if (_pdfClickOff) { _pdfClickOff(); _pdfClickOff = null; }
+  // click-to-seek
+  if (_pdfClickOff) { _pdfClickOff(); _pdfClickOff=null; }
   const handler = e => {
-    if (e.target?.id === 'pdf-hl') return;
+    if (e.target?.id==='pdf-hl') return;
     const pageEl = e.target?.closest('.pdf-page'); if (!pageEl) return;
     const pi  = parseInt(pageEl.dataset.page, 10);
     const cvs = pageEl.querySelector('canvas');
     const rc  = cvs.getBoundingClientRect();
-    const cx  = (e.clientX-rc.left)/rc.width, cy = (e.clientY-rc.top)/rc.height;
-    let bestIdx = -1, bestDist = Infinity;
-    for (let i = 0; i < _chunks.length; i++) {
-      const c = _chunks[i]; if (c.page !== pi) continue;
+    const cx  = (e.clientX-rc.left)/rc.width, cy=(e.clientY-rc.top)/rc.height;
+    let bestIdx=-1, bestDist=Infinity;
+    for (let i=0; i<_chunks.length; i++) {
+      const c=_chunks[i]; if (c.page!==pi) continue;
       if (cx>=c.bx0&&cx<=c.bx1&&cy>=c.by0&&cy<=c.by1) { bestIdx=i; break; }
-      const d = Math.abs(cy-(c.by0+c.by1)/2)*3 + Math.abs(cx-(c.bx0+c.bx1)/2);
-      if (d < bestDist) { bestDist=d; bestIdx=i; }
+      const d=Math.abs(cy-(c.by0+c.by1)/2)*3+Math.abs(cx-(c.bx0+c.bx1)/2);
+      if (d<bestDist) { bestDist=d; bestIdx=i; }
     }
-    if (bestIdx >= 0) startFrom(bestIdx);
+    if (bestIdx>=0) startFrom(bestIdx);
   };
   viewer.addEventListener('click', handler);
   _pdfClickOff = () => viewer.removeEventListener('click', handler);
 
   const refNote = refFound ? ' (references skipped)' : '';
-  setStatus(`${_chunks.length} segments · pages ${sp}–${epC}${refNote}. Click Start or any paragraph.`, 'ok');
+  const hasToken = !!localStorage.getItem('hf_token');
+  setStatus(
+    `${_chunks.length} segments · pages ${sp}–${epC}${refNote}. ${hasToken ? 'Click ▶ Start or any paragraph.' : 'Add HF token above to start.'}`,
+    'ok'
+  );
   setBtns('idle');
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-const speedEl = document.getElementById('speed');
-speedEl.addEventListener('input', () => {
-  document.getElementById('speed-val').textContent = (+speedEl.value).toFixed(1)+'×';
+document.getElementById('speed').addEventListener('input', function() {
+  document.getElementById('speed-val').textContent=(+this.value).toFixed(1)+'×';
 });
 
 const zone   = document.getElementById('drop-zone');
@@ -560,34 +718,32 @@ zone.addEventListener('dragleave', () => zone.classList.remove('over'));
 zone.addEventListener('drop', e => {
   e.preventDefault(); zone.classList.remove('over');
   const f = e.dataTransfer.files[0];
-  if (f?.type === 'application/pdf') handleFile(f);
+  if (f?.type==='application/pdf') handleFile(f);
 });
 finput.addEventListener('change', () => { if (finput.files[0]) handleFile(finput.files[0]); });
 
 async function handleFile(file) {
   zone.classList.add('loaded');
-  zone.innerHTML = `📄 <strong>${file.name}</strong>`;
+  zone.innerHTML=`📄 <strong>${file.name}</strong>`;
   setStatus('Rendering pages…');
-  document.getElementById('btn-start').disabled = true;
+  document.getElementById('btn-start').disabled=true;
   _pdfBuf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: _pdfBuf.slice() }).promise;
-  document.getElementById('from-page').value = 1;
-  document.getElementById('to-page').value   = pdf.numPages;
-  try {
-    await preparePDF();
-  } catch(e) {
-    setStatus('Error: ' + e.message, 'err');
-  }
+  document.getElementById('from-page').value=1;
+  document.getElementById('to-page').value=pdf.numPages;
+  try { await preparePDF(); } catch(e) { setStatus('Error: '+e.message, 'err'); }
 }
 
 document.getElementById('btn-start').addEventListener('click', () => {
   if (!_pdfBuf) { setStatus('Upload a PDF first.'); return; }
-  stopAll();
-  startFrom(0);
+  if (!localStorage.getItem('hf_token')) { setStatus('Enter your HF token first.', 'err'); return; }
+  stopAll(); startFrom(0);
 });
-
 document.getElementById('btn-pause').addEventListener('click', togglePause);
 document.getElementById('btn-stop').addEventListener('click', stopAll);
+
+// Pre-load model in background if token already stored
+if (savedToken) setTimeout(() => loadTTS().catch(()=>{}), 800);
 </script>
 </body>
 </html>
