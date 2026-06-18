@@ -243,8 +243,9 @@ self.onmessage = async ({ data: msg }) => {
 let _worker      = null;
 let _workerReady = false;
 let _readyCbs    = [];          // [{resolve, reject}] waiting for model load
-let _pendingSynth = new Map();  // synthId → {resolve, reject}
+let _pendingSynth = new Map();  // synthId → {resolve, reject, session}
 let _nextSynthId  = 0;
+let _session      = 0;          // incremented on each seek/start; stale audio discarded
 
 function initWorker() {
   if (_worker) return;
@@ -286,7 +287,12 @@ function initWorker() {
       _readyCbs = [];
     } else if (data.type === 'audio') {
       const cb = _pendingSynth.get(data.id);
-      if (cb) { _pendingSynth.delete(data.id); cb.resolve({ audio: data.audio, sampleRate: data.sampleRate }); }
+      if (cb) {
+        _pendingSynth.delete(data.id);
+        // Discard audio from a previous seek/session so it never plays
+        if (cb.session === _session) cb.resolve({ audio: data.audio, sampleRate: data.sampleRate });
+        else cb.reject(new Error('stale'));
+      }
     } else if (data.type === 'synth_err') {
       const cb = _pendingSynth.get(data.id);
       if (cb) { _pendingSynth.delete(data.id); cb.reject(new Error(data.msg)); }
@@ -316,7 +322,7 @@ function ensureModelLoaded() {
 function synthChunk(idx) {
   return new Promise((resolve, reject) => {
     const id = _nextSynthId++;
-    _pendingSynth.set(id, { resolve, reject });
+    _pendingSynth.set(id, { resolve, reject, session: _session });
     _worker.postMessage({
       type: 'synth', id,
       text:  _chunks[idx].text,
@@ -327,8 +333,12 @@ function synthChunk(idx) {
 }
 
 function cancelWorkerQueue() {
+  // Bump session — any in-flight audio that arrives will be marked stale and discarded
+  _session++;
+  // Reject old pending promises so playNext loops exit cleanly
   _pendingSynth.forEach(cb => cb.reject(new Error('cancelled')));
   _pendingSynth.clear();
+  // Tell worker to drop anything still queued (can't cancel the one actively running)
   if (_worker) _worker.postMessage({ type: 'cancel' });
 }
 
@@ -412,7 +422,7 @@ function cleanBlock(t) {
   return t.replace(/[ \t]+/g, ' ').trim();
 }
 
-function splitChunks(text, max = 400) {
+function splitChunks(text, max = 150) {
   const sentences = text.split(/(?<=[.!?])\s+/);
   const out = []; let cur = '';
   for (let s of sentences) {
@@ -517,6 +527,7 @@ async function startFrom(idx) {
   stopCurrentAudio();
   _active=true; _paused=false; _curIdx=idx;
   setBtns('playing');
+  setStatus(`Preparing paragraph ${idx+1}…`);
   audioCtx(); // unlock iOS audio on user gesture
 
   try { await ensureModelLoaded(); } catch(e) { setBtns('idle'); return; }
@@ -534,7 +545,7 @@ async function startFrom(idx) {
     }
     let result;
     try { result=await curPromise; } catch(e) {
-      if (e.message==='cancelled') return;
+      if (e.message==='cancelled'||e.message==='stale') return;
       if (_active) { setStatus('Synthesis error: '+e.message,'err'); setBtns('idle'); }
       return;
     }
