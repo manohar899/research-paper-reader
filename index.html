@@ -22,13 +22,11 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
 }
 .field-label { font-size: 0.75rem; font-weight: 700; color: #374151; display: block; margin-bottom: 3px; }
 
-/* ── progress bar ── */
 .prog-wrap { flex-direction: column; gap: 4px; }
 .prog-bar-outer { height: 6px; background: #e5e7eb; border-radius: 99px; overflow: hidden; }
 .prog-bar-inner { height: 100%; background: #6366f1; border-radius: 99px; transition: width .25s; width: 0%; }
 .prog-label { font-size: 0.7rem; color: #6b7280; }
 
-/* ── drop zone ── */
 .drop-zone {
   border: 2px dashed #c7d2fe; border-radius: 8px; padding: 16px 12px;
   text-align: center; cursor: pointer; color: #6b7280; font-size: 0.8rem;
@@ -74,7 +72,6 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
 #status.ok  { color: #15803d; }
 #status.err { color: #dc2626; }
 
-/* ── viewer ── */
 .viewer { flex: 1; overflow-y: auto; background: #4b5563; padding: 14px 12px; }
 .viewer-placeholder {
   height: 100%; display: flex; flex-direction: column;
@@ -107,19 +104,17 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
 
 <header>
   <h1>Research Paper Audio Reader — Kokoro TTS</h1>
-  <p>Runs entirely in your browser · Kokoro neural TTS (no login required) · PDF renders as-is · yellow highlight follows the paragraph being read</p>
+  <p>Runs entirely in your browser · Kokoro neural TTS · no login required · yellow highlight follows the paragraph being read</p>
 </header>
 
 <div class="layout">
   <aside class="panel">
 
-    <!-- ── model download progress ── -->
     <div class="prog-wrap" id="prog-wrap" style="display:none">
       <div class="prog-label" id="prog-label">Downloading Kokoro model…</div>
       <div class="prog-bar-outer"><div class="prog-bar-inner" id="prog-bar"></div></div>
     </div>
 
-    <!-- ── PDF upload ── -->
     <div>
       <label class="field-label">PDF File</label>
       <div class="drop-zone" id="drop-zone">
@@ -142,12 +137,12 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
     <div>
       <label class="field-label" for="voice-sel">Voice</label>
       <select class="ctrl-input" id="voice-sel">
-        <option value="af_bella">Bella — US Female</option>
-        <option value="af_heart">Heart — US Female</option>
+        <option value="af_heart">Heart — US Female ❤️</option>
+        <option value="af_bella">Bella — US Female 🔥</option>
+        <option value="af_nicole">Nicole — US Female 🎧</option>
         <option value="af_sarah">Sarah — US Female</option>
-        <option value="af_nicole">Nicole — US Female</option>
         <option value="af_sky">Sky — US Female</option>
-        <option value="am_adam">Adam — US Male</option>
+        <option value="am_fenrir">Fenrir — US Male</option>
         <option value="am_michael">Michael — US Male</option>
         <option value="am_puck">Puck — US Male</option>
         <option value="bf_emma">Emma — UK Female</option>
@@ -176,11 +171,11 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
     </div>
     <button class="btn btn-secondary" id="btn-stop" disabled>⏹ Stop</button>
 
-    <div id="status">Upload a PDF to begin. Kokoro model (~45 MB) downloads on first use.</div>
+    <div id="status">Upload a PDF to begin. Kokoro model (~45 MB) downloads on first use and is cached.</div>
   </aside>
 
   <main class="viewer" id="viewer">
-    <div class="viewer-placeholder" id="placeholder">
+    <div class="viewer-placeholder">
       <svg width="52" height="52" fill="none" stroke="currentColor" stroke-width="1.4" viewBox="0 0 24 24">
         <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
       </svg>
@@ -196,64 +191,172 @@ import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs';
 
-// ── Kokoro TTS state ──────────────────────────────────────────────────────────
-let KokoroTTS  = null;
-let _tts       = null;
-let _audioCtx  = null;
-let _curSrc    = null;
+// ── Kokoro Web Worker (runs off main thread so UI never freezes) ──────────────
+// The ONNX model blocks the JS thread during load + each inference call.
+// Moving it to a Worker keeps the page fully responsive.
+const WORKER_SRC = `
+let _tts = null;
+let _queue = [];
+let _busy  = false;
+
+async function drain() {
+  if (_busy || !_queue.length) return;
+  _busy = true;
+  const job = _queue.shift();
+  try {
+    const res = await _tts.generate(job.text, { voice: job.voice, speed: job.speed });
+    // res.audio may be a subclass — copy to plain Float32Array for transfer
+    const audio = new Float32Array(res.audio);
+    self.postMessage(
+      { type: 'audio', id: job.id, audio, sampleRate: res.sampling_rate },
+      [audio.buffer]
+    );
+  } catch(e) {
+    self.postMessage({ type: 'synth_err', id: job.id, msg: e.message });
+  }
+  _busy = false;
+  drain();
+}
+
+self.onmessage = async ({ data: msg }) => {
+  try {
+    if (msg.type === 'load') {
+      const { KokoroTTS } = await import('https://esm.sh/kokoro-js@1.2.1');
+      _tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
+        dtype: 'q4',
+        progress_callback: p => self.postMessage({ type: 'progress', p }),
+      });
+      self.postMessage({ type: 'ready' });
+    } else if (msg.type === 'synth') {
+      _queue.push(msg);
+      drain();
+    } else if (msg.type === 'cancel') {
+      _queue = [];
+    }
+  } catch(e) {
+    self.postMessage({ type: 'error', msg: e.message });
+  }
+};
+`;
+
+// ── Worker lifecycle ──────────────────────────────────────────────────────────
+let _worker      = null;
+let _workerReady = false;
+let _readyCbs    = [];          // [{resolve, reject}] waiting for model load
+let _pendingSynth = new Map();  // synthId → {resolve, reject}
+let _nextSynthId  = 0;
+
+function initWorker() {
+  if (_worker) return;
+  const blob = new Blob([WORKER_SRC], { type: 'text/javascript' });
+  _worker = new Worker(URL.createObjectURL(blob), { type: 'module' });
+
+  _worker.onmessage = ({ data }) => {
+    if (data.type === 'progress') {
+      const p = data.p;
+      const wrap = document.getElementById('prog-wrap');
+      const bar  = document.getElementById('prog-bar');
+      const lbl  = document.getElementById('prog-label');
+      if (!wrap) return;
+      wrap.style.display = 'flex';
+      if (p.status === 'downloading' && p.total) {
+        const pct = Math.round(p.loaded / p.total * 100);
+        bar.style.width  = pct + '%';
+        lbl.textContent  = `Downloading model (${(p.total/1e6).toFixed(0)} MB): ${pct}%`;
+        setStatus(`Downloading Kokoro: ${pct}%`);
+      } else if (p.status === 'loading') {
+        bar.style.width  = '100%';
+        lbl.textContent  = 'Loading model into memory…';
+        setStatus('Loading model into memory…');
+      }
+    } else if (data.type === 'ready') {
+      _workerReady = true;
+      document.getElementById('prog-wrap').style.display = 'none';
+      const msg = _chunks.length
+        ? `${_chunks.length} segments ready. Click ▶ Start or any paragraph.`
+        : 'Kokoro loaded. Upload a PDF to begin.';
+      setStatus(msg, 'ok');
+      setBtns('idle');
+      _readyCbs.forEach(cb => cb.resolve());
+      _readyCbs = [];
+    } else if (data.type === 'error') {
+      document.getElementById('prog-wrap').style.display = 'none';
+      setStatus('Kokoro error: ' + data.msg, 'err');
+      _readyCbs.forEach(cb => cb.reject(new Error(data.msg)));
+      _readyCbs = [];
+    } else if (data.type === 'audio') {
+      const cb = _pendingSynth.get(data.id);
+      if (cb) { _pendingSynth.delete(data.id); cb.resolve({ audio: data.audio, sampleRate: data.sampleRate }); }
+    } else if (data.type === 'synth_err') {
+      const cb = _pendingSynth.get(data.id);
+      if (cb) { _pendingSynth.delete(data.id); cb.reject(new Error(data.msg)); }
+    }
+  };
+
+  _worker.onerror = (e) => {
+    setStatus('Worker error: ' + e.message, 'err');
+    _readyCbs.forEach(cb => cb.reject(new Error(e.message)));
+    _readyCbs = [];
+  };
+}
+
+function ensureModelLoaded() {
+  initWorker();
+  if (_workerReady) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    _readyCbs.push({ resolve, reject });
+    if (_readyCbs.length === 1) {  // first caller kicks off load
+      document.getElementById('prog-wrap').style.display = 'flex';
+      setStatus('Downloading Kokoro model (~45 MB, cached after first use)…');
+      _worker.postMessage({ type: 'load' });
+    }
+  });
+}
+
+function synthChunk(idx) {
+  return new Promise((resolve, reject) => {
+    const id = _nextSynthId++;
+    _pendingSynth.set(id, { resolve, reject });
+    _worker.postMessage({
+      type: 'synth', id,
+      text:  _chunks[idx].text,
+      voice: currentVoice(),
+      speed: currentSpeed(),
+    });
+  });
+}
+
+function cancelWorkerQueue() {
+  _pendingSynth.forEach(cb => cb.reject(new Error('cancelled')));
+  _pendingSynth.clear();
+  if (_worker) _worker.postMessage({ type: 'cancel' });
+}
+
+// ── Web Audio playback ────────────────────────────────────────────────────────
+let _audioCtx = null;
+let _curSrc   = null;
 
 function audioCtx() {
-  if (!_audioCtx || _audioCtx.state === 'closed') {
+  if (!_audioCtx || _audioCtx.state === 'closed')
     _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
   if (_audioCtx.state === 'suspended') _audioCtx.resume();
   return _audioCtx;
 }
 
-// ── Load Kokoro (lazy, cached) ────────────────────────────────────────────────
-// Model: onnx-community/Kokoro-82M-v1.0-ONNX — public, no auth required
-async function loadTTS() {
-  if (_tts) return _tts;
+function stopCurrentAudio() {
+  if (_curSrc) { try { _curSrc.stop(); } catch(_) {} _curSrc = null; }
+}
 
-  if (!KokoroTTS) {
-    const mod = await import('https://esm.sh/kokoro-js@1.2.1');
-    KokoroTTS = mod.KokoroTTS;
-  }
-
-  const progWrap  = document.getElementById('prog-wrap');
-  const progBar   = document.getElementById('prog-bar');
-  const progLabel = document.getElementById('prog-label');
-  progWrap.style.display = 'flex';
-  setStatus('Downloading Kokoro model (~45 MB, cached after first use)…');
-
-  try {
-    _tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
-      dtype: 'q4',
-      progress_callback: (p) => {
-        if (p.status === 'downloading') {
-          const pct = p.total ? Math.round((p.loaded / p.total) * 100) : 0;
-          const mb  = p.total ? ` (${(p.total/1e6).toFixed(0)} MB)` : '';
-          progBar.style.width  = pct + '%';
-          progLabel.textContent = `Downloading model${mb}: ${pct}%`;
-        } else if (p.status === 'loading') {
-          progBar.style.width  = '100%';
-          progLabel.textContent = 'Loading model into memory…';
-        }
-      },
-    });
-  } catch (e) {
-    progWrap.style.display = 'none';
-    setStatus('Kokoro load error: ' + e.message, 'err');
-    throw e;
-  }
-
-  progWrap.style.display = 'none';
-  const ready = _chunks.length
-    ? `${_chunks.length} segments ready. Click ▶ Start or any paragraph.`
-    : 'Kokoro loaded. Upload a PDF to begin.';
-  setStatus(ready, 'ok');
-  setBtns('idle');
-  return _tts;
+function playResult({ audio, sampleRate }) {
+  return new Promise((resolve, reject) => {
+    const ctx = audioCtx();
+    const buf = ctx.createBuffer(1, audio.length, sampleRate);
+    buf.copyToChannel(audio, 0);
+    const src = ctx.createBufferSource();
+    src.buffer = buf; src.connect(ctx.destination);
+    src.onended = resolve; src.onerror = reject;
+    src.start(); _curSrc = src;
+  });
 }
 
 // ── Text cleaning ─────────────────────────────────────────────────────────────
@@ -262,10 +365,6 @@ const MATH_MAP = {
   'η':'eta','θ':'theta','ι':'iota','κ':'kappa','λ':'lambda','μ':'mu',
   'ν':'nu','ξ':'xi','ο':'omicron','π':'pi','ρ':'rho','σ':'sigma',
   'τ':'tau','υ':'upsilon','φ':'phi','χ':'chi','ψ':'psi','ω':'omega',
-  'Α':'Alpha','Β':'Beta','Γ':'Gamma','Δ':'Delta','Ε':'Epsilon','Ζ':'Zeta',
-  'Η':'Eta','Θ':'Theta','Ι':'Iota','Κ':'Kappa','Λ':'Lambda','Μ':'Mu',
-  'Ν':'Nu','Ξ':'Xi','Ο':'Omicron','Π':'Pi','Ρ':'Rho','Σ':'Sigma',
-  'Τ':'Tau','Υ':'Upsilon','Φ':'Phi','Χ':'Chi','Ψ':'Psi','Ω':'Omega',
   '∇':'nabla','∂':'partial','∑':'sum','∏':'product','∫':'integral',
   '∈':'in','∉':'not in','∀':'for all','∃':'there exists',
   '∩':'intersection','∪':'union','⊂':'subset of','⊆':'subset of or equal to',
@@ -290,23 +389,16 @@ const cleanCitations = t => t
   .replace(/\[[\d][,\d\s\-–]*\]/g, '')
   .replace(/\([A-Z][a-z]+(?: et al\.?,?| and [A-Z][a-z]+,?|,) \d{4}[a-z]?\)/g, '')
   .replace(/[A-Z][a-z]+(?: et al\.?)? \((\d{4}[a-z]?)\)/g, '($1)');
-
 const cleanUrls = t => t
-  .replace(/https?:\/\/\S+/g, 'link')
-  .replace(/www\.\S+/g, 'link')
+  .replace(/https?:\/\/\S+/g, 'link').replace(/www\.\S+/g, 'link')
   .replace(/\bdoi:\s*10\.\d+\/\S+/gi, 'reference link')
   .replace(/arXiv:\s*\d{4}\.\d+(?:v\d+)?/gi, 'preprint');
-
 const cleanMath = t =>
   Object.entries(MATH_MAP).reduce((s,[sym,w]) => s.replaceAll(sym, ` ${w} `), t);
-
 const announceSections = t => t
-  .replace(NUMBERED_SEC_RE, 'Section $1.')
-  .replace(SECTION_RE, 'Section $1.');
-
+  .replace(NUMBERED_SEC_RE, 'Section $1.').replace(SECTION_RE, 'Section $1.');
 const dropEquationLines = t => t.split('\n').map(line => {
-  const s = line.trim();
-  if (!s) return line;
+  const s = line.trim(); if (!s) return line;
   if (/^\d{1,4}$/.test(s)) return '';
   const alpha = [...s].filter(c => /[a-zA-Z\s]/.test(c)).length / s.length;
   return (s.length > 6 && alpha < 0.35) ? 'Equation.' : line;
@@ -314,8 +406,7 @@ const dropEquationLines = t => t.split('\n').map(line => {
 
 function cleanBlock(t) {
   t = t.replace(/-\n/g, '');
-  t = cleanUrls(t); t = cleanCitations(t);
-  t = announceSections(t); t = cleanMath(t);
+  t = cleanUrls(t); t = cleanCitations(t); t = announceSections(t); t = cleanMath(t);
   t = t.replace(/\bFig(?:ure)?\.?\s+(\d+)/gi, 'Figure $1');
   t = dropEquationLines(t);
   return t.replace(/[ \t]+/g, ' ').trim();
@@ -333,8 +424,7 @@ function splitChunks(text, max = 400) {
         ? s.split(/(?<=[,;])\s+/).reduce((acc,p) => {
             if (acc.length+p.length+1 <= max) return acc ? acc+' '+p : p;
             if (acc) out.push(acc); return p;
-          }, '')
-        : s;
+          }, '') : s;
     }
   }
   if (cur) out.push(cur);
@@ -342,69 +432,56 @@ function splitChunks(text, max = 400) {
 }
 
 // ── PDF rendering + text extraction ──────────────────────────────────────────
-const RENDER_SCALE = 1.5;
-
 function sameColumn(lineA, lineB) {
-  const a0 = Math.min(...lineA.map(w=>w.x0)), a1 = Math.max(...lineA.map(w=>w.x1));
-  const b0 = Math.min(...lineB.map(w=>w.x0)), b1 = Math.max(...lineB.map(w=>w.x1));
-  const overlap = Math.max(0, Math.min(a1,b1)-Math.max(a0,b0));
-  const minW = Math.min(a1-a0, b1-b0);
-  return minW > 0 && overlap/minW > 0.15;
+  const a0=Math.min(...lineA.map(w=>w.x0)), a1=Math.max(...lineA.map(w=>w.x1));
+  const b0=Math.min(...lineB.map(w=>w.x0)), b1=Math.max(...lineB.map(w=>w.x1));
+  const ov=Math.max(0,Math.min(a1,b1)-Math.max(a0,b0)), mw=Math.min(a1-a0,b1-b0);
+  return mw>0 && ov/mw>0.15;
 }
 
 async function renderAndExtract(pdfPage) {
-  const viewport = pdfPage.getViewport({ scale: RENDER_SCALE });
-  const pdfW = pdfPage.view[2], pdfH = pdfPage.view[3];
-
-  const canvas = document.createElement('canvas');
-  canvas.width = viewport.width; canvas.height = viewport.height;
-  await pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+  const viewport = pdfPage.getViewport({ scale: 1.5 });
+  const pdfW=pdfPage.view[2], pdfH=pdfPage.view[3];
+  const canvas=document.createElement('canvas');
+  canvas.width=viewport.width; canvas.height=viewport.height;
+  await pdfPage.render({ canvasContext:canvas.getContext('2d'), viewport }).promise;
 
   const content = await pdfPage.getTextContent();
   const words = content.items
-    .filter(it => it.str && it.str.trim())
+    .filter(it=>it.str&&it.str.trim())
     .map(it => {
-      const x = it.transform[4], y = it.transform[5];
-      const h = Math.abs(it.height) || Math.abs(it.transform[0]) || 10;
-      const w = Math.abs(it.width) || 4;
-      return { text: it.str, x0:x/pdfW, y0:1-(y+h)/pdfH, x1:(x+w)/pdfW, y1:1-y/pdfH };
+      const x=it.transform[4], y=it.transform[5];
+      const h=Math.abs(it.height)||Math.abs(it.transform[0])||10, w=Math.abs(it.width)||4;
+      return { text:it.str, x0:x/pdfW, y0:1-(y+h)/pdfH, x1:(x+w)/pdfW, y1:1-y/pdfH };
     })
-    .filter(w => w.y0>=0 && w.y1<=1.01 && w.x1>w.x0);
+    .filter(w=>w.y0>=0&&w.y1<=1.01&&w.x1>w.x0);
 
-  if (!words.length) return { canvas, blocks: [] };
-  words.sort((a,b) => a.y0-b.y0 || a.x0-b.x0);
+  if (!words.length) return { canvas, blocks:[] };
+  words.sort((a,b)=>a.y0-b.y0||a.x0-b.x0);
 
-  const lines = []; let line = [words[0]];
-  for (let i=1; i<words.length; i++) {
-    const prev=words[i-1], cur=words[i];
-    const lh = Math.max(prev.y1-prev.y0, 0.005);
-    if (Math.abs(cur.y0-prev.y0) < lh*0.85) line.push(cur);
-    else { lines.push(line); line=[cur]; }
+  const lines=[]; let line=[words[0]];
+  for (let i=1;i<words.length;i++) {
+    const prev=words[i-1],cur=words[i],lh=Math.max(prev.y1-prev.y0,0.005);
+    if (Math.abs(cur.y0-prev.y0)<lh*0.85) line.push(cur); else { lines.push(line); line=[cur]; }
   }
   if (line.length) lines.push(line);
 
-  const paras = []; let para = [lines[0]];
-  for (let i=1; i<lines.length; i++) {
-    const prev = para[para.length-1];
-    const prevBot = Math.max(...prev.map(w=>w.y1));
-    const curTop  = Math.min(...lines[i].map(w=>w.y0));
-    const lh = prevBot - Math.min(...prev.map(w=>w.y0));
-    if (curTop-prevBot < lh*1.9 && sameColumn(prev, lines[i])) para.push(lines[i]);
+  const paras=[]; let para=[lines[0]];
+  for (let i=1;i<lines.length;i++) {
+    const prev=para[para.length-1];
+    const prevBot=Math.max(...prev.map(w=>w.y1)), curTop=Math.min(...lines[i].map(w=>w.y0));
+    const lh=prevBot-Math.min(...prev.map(w=>w.y0));
+    if (curTop-prevBot<lh*1.9&&sameColumn(prev,lines[i])) para.push(lines[i]);
     else { paras.push(para); para=[lines[i]]; }
   }
   paras.push(para);
 
-  const blocks = paras.map(p => {
-    const all  = p.flat();
-    const text = p.map(l => l.map(w=>w.text).join(' ')).join(' ');
-    return {
-      text,
-      bx0: +Math.min(...all.map(w=>w.x0)).toFixed(4),
-      by0: +Math.min(...all.map(w=>w.y0)).toFixed(4),
-      bx1: +Math.max(...all.map(w=>w.x1)).toFixed(4),
-      by1: +Math.max(...all.map(w=>w.y1)).toFixed(4),
-    };
-  }).filter(b => b.text.trim() && b.bx1>b.bx0 && b.by1>b.by0);
+  const blocks=paras.map(p=>{
+    const all=p.flat(), text=p.map(l=>l.map(w=>w.text).join(' ')).join(' ');
+    return { text,
+      bx0:+Math.min(...all.map(w=>w.x0)).toFixed(4), by0:+Math.min(...all.map(w=>w.y0)).toFixed(4),
+      bx1:+Math.max(...all.map(w=>w.x1)).toFixed(4), by1:+Math.max(...all.map(w=>w.y1)).toFixed(4) };
+  }).filter(b=>b.text.trim()&&b.bx1>b.bx0&&b.by1>b.by0);
 
   return { canvas, blocks };
 }
@@ -419,173 +496,130 @@ let _pdfClickOff = null;
 
 // ── Highlight ─────────────────────────────────────────────────────────────────
 function showHL(i) {
-  const c = _chunks[i]; if (!c) return;
-  const pageEl = document.querySelector(`.pdf-page[data-page="${c.page}"]`);
-  if (!pageEl) return;
-  const cvs = pageEl.querySelector('canvas');
-  const w = cvs.clientWidth, h = cvs.clientHeight;
-  let hl = document.getElementById('pdf-hl');
-  if (!hl) { hl = document.createElement('div'); hl.id='pdf-hl'; }
+  const c=_chunks[i]; if(!c) return;
+  const pageEl=document.querySelector(`.pdf-page[data-page="${c.page}"]`); if(!pageEl) return;
+  const cvs=pageEl.querySelector('canvas'), w=cvs.clientWidth, h=cvs.clientHeight;
+  let hl=document.getElementById('pdf-hl');
+  if (!hl) { hl=document.createElement('div'); hl.id='pdf-hl'; }
   pageEl.appendChild(hl);
-  Object.assign(hl.style, {
-    left:   c.bx0*w+'px', top:    c.by0*h+'px',
-    width:  (c.bx1-c.bx0)*w+'px', height: (c.by1-c.by0)*h+'px', display:'block',
-  });
+  Object.assign(hl.style,{ left:c.bx0*w+'px', top:c.by0*h+'px',
+    width:(c.bx1-c.bx0)*w+'px', height:(c.by1-c.by0)*h+'px', display:'block' });
   hl.scrollIntoView({ behavior:'smooth', block:'center' });
 }
 function removeHL() { document.getElementById('pdf-hl')?.remove(); }
 
-// ── Kokoro synthesis + Web Audio playback ─────────────────────────────────────
+// ── Playback engine ───────────────────────────────────────────────────────────
 function currentVoice() { return document.getElementById('voice-sel').value; }
 function currentSpeed() { return parseFloat(document.getElementById('speed').value); }
 
-async function synthChunk(text) {
-  const tts = await loadTTS();
-  return tts.generate(text, { voice: currentVoice(), speed: currentSpeed() });
-}
-
-function playResult(result) {
-  return new Promise((resolve, reject) => {
-    const ctx = audioCtx();
-    const buf = ctx.createBuffer(1, result.audio.length, result.sampling_rate);
-    buf.copyToChannel(result.audio, 0);
-    const src = ctx.createBufferSource();
-    src.buffer = buf; src.connect(ctx.destination);
-    src.onended = resolve; src.onerror = reject;
-    src.start();
-    _curSrc = src;
-  });
-}
-
-function stopCurrentAudio() {
-  if (_curSrc) { try { _curSrc.stop(); } catch(_) {} _curSrc = null; }
-}
-
-// ── Playback engine with prefetch ─────────────────────────────────────────────
 async function startFrom(idx) {
+  cancelWorkerQueue();
   stopCurrentAudio();
-  _active = true; _paused = false; _curIdx = idx;
+  _active=true; _paused=false; _curIdx=idx;
   setBtns('playing');
-  audioCtx(); // unlock on gesture
+  audioCtx(); // unlock iOS audio on user gesture
 
-  let curPromise  = synthChunk(_chunks[_curIdx]?.text || '');
-  let nextPromise = (_curIdx+1 < _chunks.length)
-    ? synthChunk(_chunks[_curIdx+1].text) : Promise.resolve(null);
+  try { await ensureModelLoaded(); } catch(e) { setBtns('idle'); return; }
+  if (!_active) return;
+
+  // prefetch: synthesise chunk N+1 while N is playing
+  let curPromise  = synthChunk(_curIdx);
+  let nextPromise = _curIdx+1<_chunks.length ? synthChunk(_curIdx+1) : Promise.resolve(null);
 
   async function playNext() {
-    if (!_active || _curIdx >= _chunks.length) {
+    if (!_active||_curIdx>=_chunks.length) {
       removeHL(); setBtns('idle');
-      setStatus(`${_chunks.length} segments ready. Click ▶ Start or any paragraph.`, 'ok');
+      setStatus(`${_chunks.length} segments ready. Click ▶ Start or any paragraph.`,'ok');
       return;
     }
     let result;
-    try { result = await curPromise; }
-    catch(e) {
-      if (_active) { setStatus('Synthesis error: '+e.message, 'err'); setBtns('idle'); }
+    try { result=await curPromise; } catch(e) {
+      if (e.message==='cancelled') return;
+      if (_active) { setStatus('Synthesis error: '+e.message,'err'); setBtns('idle'); }
       return;
     }
-    if (!_active) return;
+    if (!_active||!result) return;
 
     showHL(_curIdx);
     setStatus(`Reading ${_curIdx+1} / ${_chunks.length}…`);
-
     try { await playResult(result); } catch(_) {}
     if (!_active) return;
 
     _curIdx++;
     curPromise  = nextPromise;
-    nextPromise = (_curIdx+1 < _chunks.length && _active)
-      ? synthChunk(_chunks[_curIdx+1].text) : Promise.resolve(null);
-
+    nextPromise = _curIdx+1<_chunks.length&&_active
+      ? synthChunk(_curIdx+1) : Promise.resolve(null);
     if (!_paused) playNext();
   }
-
   playNext();
 }
 
 function togglePause() {
   if (!_active) return;
   if (!_paused) {
-    _paused = true;
-    stopCurrentAudio();
-    setBtns('paused');
+    _paused=true; stopCurrentAudio(); setBtns('paused');
   } else {
-    _paused = false;
-    startFrom(_curIdx);
+    _paused=false; startFrom(_curIdx);
   }
 }
 
 function stopAll() {
-  _active = false; _paused = false;
-  stopCurrentAudio();
-  removeHL(); setBtns('idle');
-  if (_chunks.length) setStatus(`${_chunks.length} segments ready. Click ▶ Start or any paragraph.`, 'ok');
+  _active=false; _paused=false;
+  cancelWorkerQueue(); stopCurrentAudio(); removeHL(); setBtns('idle');
+  if (_chunks.length) setStatus(`${_chunks.length} segments ready. Click ▶ Start or any paragraph.`,'ok');
 }
 
 // ── UI helpers ────────────────────────────────────────────────────────────────
-function setStatus(msg, cls) {
-  const el = document.getElementById('status');
-  el.textContent = msg; el.className = cls||'';
+function setStatus(msg,cls) {
+  const el=document.getElementById('status'); el.textContent=msg; el.className=cls||'';
 }
 function setBtns(state) {
   const s=document.getElementById('btn-start');
   const p=document.getElementById('btn-pause');
   const x=document.getElementById('btn-stop');
-  if (state==='playing') {
-    s.disabled=true;  p.disabled=false; p.textContent='⏸ Pause'; x.disabled=false;
-  } else if (state==='paused') {
-    s.disabled=true;  p.disabled=false; p.textContent='▶ Resume'; x.disabled=false;
-  } else {
-    s.disabled = !_chunks.length;
-    p.disabled=true; x.disabled=true;
-  }
+  if (state==='playing') { s.disabled=true; p.disabled=false; p.textContent='⏸ Pause'; x.disabled=false; }
+  else if (state==='paused') { s.disabled=true; p.disabled=false; p.textContent='▶ Resume'; x.disabled=false; }
+  else { s.disabled=!_chunks.length; p.disabled=true; x.disabled=true; }
 }
 
 // ── PDF preparation ───────────────────────────────────────────────────────────
 async function preparePDF() {
-  const skipRefs = document.getElementById('skip-refs').checked;
-  const sp = Math.max(1, parseInt(document.getElementById('from-page').value)||1);
-  const ep = parseInt(document.getElementById('to-page').value)||sp;
-  const viewer = document.getElementById('viewer');
-  viewer.innerHTML = ''; _chunks = [];
+  const skipRefs=document.getElementById('skip-refs').checked;
+  const sp=Math.max(1,parseInt(document.getElementById('from-page').value)||1);
+  const ep=parseInt(document.getElementById('to-page').value)||sp;
+  const viewer=document.getElementById('viewer');
+  viewer.innerHTML=''; _chunks=[];
 
-  const pdf = await pdfjsLib.getDocument({ data: _pdfBuf.slice() }).promise;
-  const epC = Math.min(ep, pdf.numPages);
-  let refFound = false;
+  const pdf=await pdfjsLib.getDocument({ data:_pdfBuf.slice() }).promise;
+  const epC=Math.min(ep,pdf.numPages); let refFound=false;
 
-  for (let pn=sp; pn<=epC && !refFound; pn++) {
+  for (let pn=sp;pn<=epC&&!refFound;pn++) {
     setStatus(`Rendering page ${pn}/${epC}…`);
-    const { canvas, blocks } = await renderAndExtract(await pdf.getPage(pn));
-    const rel = pn-sp;
-
-    const pageEl = document.createElement('div');
+    const { canvas, blocks }=await renderAndExtract(await pdf.getPage(pn));
+    const rel=pn-sp;
+    const pageEl=document.createElement('div');
     pageEl.className='pdf-page'; pageEl.dataset.page=String(rel);
     pageEl.title='Click to start reading from here';
-    pageEl.appendChild(canvas);
-    viewer.appendChild(pageEl);
+    pageEl.appendChild(canvas); viewer.appendChild(pageEl);
 
     for (const block of blocks) {
-      if (skipRefs && REFS_HEADER_RE.test(block.text.trim())) { refFound=true; break; }
-      const cleaned = cleanBlock(block.text);
-      if (!cleaned) continue;
-      for (const txt of splitChunks(cleaned)) {
+      if (skipRefs&&REFS_HEADER_RE.test(block.text.trim())) { refFound=true; break; }
+      const cleaned=cleanBlock(block.text); if (!cleaned) continue;
+      for (const txt of splitChunks(cleaned))
         if (txt.trim()) _chunks.push({ text:txt, page:rel,
           bx0:block.bx0, by0:block.by0, bx1:block.bx1, by1:block.by1 });
-      }
     }
   }
 
-  // click-to-seek
   if (_pdfClickOff) { _pdfClickOff(); _pdfClickOff=null; }
-  const handler = e => {
+  const handler=e=>{
     if (e.target?.id==='pdf-hl') return;
-    const pageEl = e.target?.closest('.pdf-page'); if (!pageEl) return;
-    const pi  = parseInt(pageEl.dataset.page, 10);
-    const cvs = pageEl.querySelector('canvas');
-    const rc  = cvs.getBoundingClientRect();
-    const cx  = (e.clientX-rc.left)/rc.width, cy=(e.clientY-rc.top)/rc.height;
+    const pageEl=e.target?.closest('.pdf-page'); if (!pageEl) return;
+    const pi=parseInt(pageEl.dataset.page,10);
+    const cvs=pageEl.querySelector('canvas'), rc=cvs.getBoundingClientRect();
+    const cx=(e.clientX-rc.left)/rc.width, cy=(e.clientY-rc.top)/rc.height;
     let bestIdx=-1, bestDist=Infinity;
-    for (let i=0; i<_chunks.length; i++) {
+    for (let i=0;i<_chunks.length;i++) {
       const c=_chunks[i]; if (c.page!==pi) continue;
       if (cx>=c.bx0&&cx<=c.bx1&&cy>=c.by0&&cy<=c.by1) { bestIdx=i; break; }
       const d=Math.abs(cy-(c.by0+c.by1)/2)*3+Math.abs(cx-(c.bx0+c.bx1)/2);
@@ -593,14 +627,11 @@ async function preparePDF() {
     }
     if (bestIdx>=0) startFrom(bestIdx);
   };
-  viewer.addEventListener('click', handler);
-  _pdfClickOff = () => viewer.removeEventListener('click', handler);
+  viewer.addEventListener('click',handler);
+  _pdfClickOff=()=>viewer.removeEventListener('click',handler);
 
-  const refNote = refFound ? ' (references skipped)' : '';
-  setStatus(
-    `${_chunks.length} segments · pages ${sp}–${epC}${refNote}. Click ▶ Start or any paragraph.`,
-    'ok'
-  );
+  const refNote=refFound?' (references skipped)':'';
+  setStatus(`${_chunks.length} segments · pages ${sp}–${epC}${refNote}. Click ▶ Start or any paragraph.`,'ok');
   setBtns('idle');
 }
 
@@ -609,39 +640,36 @@ document.getElementById('speed').addEventListener('input', function() {
   document.getElementById('speed-val').textContent=(+this.value).toFixed(1)+'×';
 });
 
-const zone   = document.getElementById('drop-zone');
-const finput = document.getElementById('file-input');
-zone.addEventListener('click', () => finput.click());
-zone.addEventListener('dragover',  e => { e.preventDefault(); zone.classList.add('over'); });
-zone.addEventListener('dragleave', () => zone.classList.remove('over'));
-zone.addEventListener('drop', e => {
+const zone=document.getElementById('drop-zone'), finput=document.getElementById('file-input');
+zone.addEventListener('click',()=>finput.click());
+zone.addEventListener('dragover',e=>{e.preventDefault();zone.classList.add('over');});
+zone.addEventListener('dragleave',()=>zone.classList.remove('over'));
+zone.addEventListener('drop',e=>{
   e.preventDefault(); zone.classList.remove('over');
-  const f = e.dataTransfer.files[0];
-  if (f?.type==='application/pdf') handleFile(f);
+  const f=e.dataTransfer.files[0]; if(f?.type==='application/pdf') handleFile(f);
 });
-finput.addEventListener('change', () => { if (finput.files[0]) handleFile(finput.files[0]); });
+finput.addEventListener('change',()=>{ if(finput.files[0]) handleFile(finput.files[0]); });
 
 async function handleFile(file) {
   zone.classList.add('loaded');
   zone.innerHTML=`📄 <strong>${file.name}</strong>`;
-  setStatus('Rendering pages…');
-  document.getElementById('btn-start').disabled=true;
-  _pdfBuf = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: _pdfBuf.slice() }).promise;
+  setStatus('Rendering pages…'); document.getElementById('btn-start').disabled=true;
+  _pdfBuf=await file.arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({ data:_pdfBuf.slice() }).promise;
   document.getElementById('from-page').value=1;
   document.getElementById('to-page').value=pdf.numPages;
-  try { await preparePDF(); } catch(e) { setStatus('Error: '+e.message, 'err'); }
+  try { await preparePDF(); } catch(e) { setStatus('Error: '+e.message,'err'); }
 }
 
-document.getElementById('btn-start').addEventListener('click', () => {
+document.getElementById('btn-start').addEventListener('click',()=>{
   if (!_pdfBuf) { setStatus('Upload a PDF first.'); return; }
   stopAll(); startFrom(0);
 });
-document.getElementById('btn-pause').addEventListener('click', togglePause);
-document.getElementById('btn-stop').addEventListener('click', stopAll);
+document.getElementById('btn-pause').addEventListener('click',togglePause);
+document.getElementById('btn-stop').addEventListener('click',stopAll);
 
-// Pre-warm model import in background (doesn't download yet, just resolves the module)
-setTimeout(() => import('https://esm.sh/kokoro-js@1.2.1').then(m => { KokoroTTS = m.KokoroTTS; }).catch(()=>{}), 1000);
+// Spin up worker immediately so module import resolves in background
+initWorker();
 </script>
 </body>
 </html>
