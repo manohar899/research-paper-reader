@@ -22,36 +22,6 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
 }
 .field-label { font-size: 0.75rem; font-weight: 700; color: #374151; display: block; margin-bottom: 3px; }
 
-/* ── token card ── */
-.token-card {
-  background: #fffbeb; border: 1px solid #fcd34d;
-  border-radius: 8px; padding: 11px 12px; display: flex; flex-direction: column; gap: 7px;
-}
-.token-card.hidden { display: none; }
-.token-title { font-size: 0.78rem; font-weight: 700; color: #92400e; }
-.token-steps { font-size: 0.72rem; color: #78350f; line-height: 1.6; }
-.token-steps a { color: #b45309; }
-.token-row { display: flex; gap: 6px; }
-.token-row input {
-  flex: 1; padding: 6px 8px; border: 1px solid #fcd34d; border-radius: 6px;
-  font-size: 0.8rem; background: #fff; font-family: monospace; color: #111827;
-}
-.token-row input:focus { outline: 2px solid #f59e0b; border-color: transparent; }
-.btn-xs {
-  padding: 6px 10px; border: none; border-radius: 6px; cursor: pointer;
-  font-size: 0.78rem; font-weight: 700; white-space: nowrap;
-  background: #f59e0b; color: #fff;
-}
-.btn-xs:hover { background: #d97706; }
-
-.token-ok {
-  font-size: 0.75rem; color: #15803d; background: #f0fdf4;
-  border: 1px solid #bbf7d0; border-radius: 6px; padding: 7px 10px;
-  display: flex; justify-content: space-between; align-items: center;
-}
-.token-ok.hidden { display: none; }
-.token-ok a { color: #15803d; font-size: 0.7rem; }
-
 /* ── progress bar ── */
 .prog-wrap { flex-direction: column; gap: 4px; }
 .prog-bar-outer { height: 6px; background: #e5e7eb; border-radius: 99px; overflow: hidden; }
@@ -137,30 +107,11 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
 
 <header>
   <h1>Research Paper Audio Reader — Kokoro TTS</h1>
-  <p>Runs entirely in your browser · Kokoro neural TTS · PDF renders as-is · yellow highlight follows the paragraph being read</p>
+  <p>Runs entirely in your browser · Kokoro neural TTS (no login required) · PDF renders as-is · yellow highlight follows the paragraph being read</p>
 </header>
 
 <div class="layout">
   <aside class="panel">
-
-    <!-- ── HF token setup ── -->
-    <div class="token-card" id="token-card">
-      <div class="token-title">🔑 One-time Kokoro TTS setup</div>
-      <div class="token-steps">
-        1. <a href="https://huggingface.co/onnx-community/Kokoro-82M-v1.0" target="_blank">Accept model terms</a> (free HF account)<br>
-        2. <a href="https://huggingface.co/settings/tokens" target="_blank">Create a read token</a> at hf.co/settings/tokens<br>
-        3. Paste below — saved in your browser only
-      </div>
-      <div class="token-row">
-        <input type="password" id="hf-token" placeholder="hf_xxxxxxxxxxxxxxxx" autocomplete="off">
-        <button class="btn-xs" id="btn-save-token">Save</button>
-      </div>
-    </div>
-
-    <div class="token-ok hidden" id="token-ok">
-      <span>✓ Kokoro TTS ready</span>
-      <a href="#" id="token-reset">change token</a>
-    </div>
 
     <!-- ── model download progress ── -->
     <div class="prog-wrap" id="prog-wrap" style="display:none">
@@ -225,7 +176,7 @@ header p  { font-size: 0.72rem; opacity: .65; margin-top: 2px; }
     </div>
     <button class="btn btn-secondary" id="btn-stop" disabled>⏹ Stop</button>
 
-    <div id="status">Set up your HF token above to begin.</div>
+    <div id="status">Upload a PDF to begin. Kokoro model (~45 MB) downloads on first use.</div>
   </aside>
 
   <main class="viewer" id="viewer">
@@ -245,31 +196,6 @@ import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs';
 
-// ── HF auth — patch fetch so ALL huggingface.co requests carry the token ─────
-// kokoro-js bundles its own copy of @huggingface/transformers, so setting
-// env.accessToken on our imported instance has no effect on kokoro's internal
-// requests. Patching window.fetch is the only reliable intercept point.
-function installHFAuthInterceptor(token) {
-  const _orig = window._hfOrigFetch || window.fetch;
-  window._hfOrigFetch = _orig;
-  window.fetch = function(input, init) {
-    init = init ? { ...init } : {};
-    const url = typeof input === 'string' ? input
-              : (input instanceof Request ? input.url : String(input));
-    if (token && url.includes('huggingface.co')) {
-      init.headers = { ...(init.headers || {}), Authorization: `Bearer ${token}` };
-    }
-    return _orig.call(this, input, init);
-  };
-}
-
-import { env } from 'https://esm.sh/@huggingface/transformers@3';
-const savedToken = localStorage.getItem('hf_token') || '';
-if (savedToken) {
-  env.accessToken = savedToken;
-  installHFAuthInterceptor(savedToken);
-}
-
 // ── Kokoro TTS state ──────────────────────────────────────────────────────────
 let KokoroTTS  = null;
 let _tts       = null;
@@ -284,53 +210,13 @@ function audioCtx() {
   return _audioCtx;
 }
 
-// ── Token UI ──────────────────────────────────────────────────────────────────
-const tokenCard  = document.getElementById('token-card');
-const tokenOk    = document.getElementById('token-ok');
-const tokenInput = document.getElementById('hf-token');
-const btnSave    = document.getElementById('btn-save-token');
-const tokenReset = document.getElementById('token-reset');
-
-function applyTokenUI(hasToken) {
-  tokenCard.classList.toggle('hidden', hasToken);
-  tokenOk.classList.toggle('hidden', !hasToken);
-  if (!hasToken) setStatus('Set up your HF token above to begin.');
-}
-applyTokenUI(!!savedToken);
-
-btnSave.addEventListener('click', async () => {
-  const t = tokenInput.value.trim();
-  if (!t.startsWith('hf_') || t.length < 10) {
-    setStatus('Token must start with hf_ and be at least 10 chars.', 'err'); return;
-  }
-  localStorage.setItem('hf_token', t);
-  env.accessToken = t;
-  installHFAuthInterceptor(t);
-  applyTokenUI(true);
-  setStatus('Token saved. Loading Kokoro model in background…');
-  loadTTS().catch(() => {});
-});
-
-tokenReset.addEventListener('click', e => {
-  e.preventDefault();
-  localStorage.removeItem('hf_token');
-  tokenInput.value = '';
-  env.accessToken = '';
-  installHFAuthInterceptor('');
-  _tts = null; KokoroTTS = null;
-  applyTokenUI(false);
-});
-
 // ── Load Kokoro (lazy, cached) ────────────────────────────────────────────────
+// Model: onnx-community/Kokoro-82M-v1.0-ONNX — public, no auth required
 async function loadTTS() {
   if (_tts) return _tts;
 
-  if (!localStorage.getItem('hf_token')) {
-    throw new Error('No HuggingFace token — set it up first.');
-  }
-
   if (!KokoroTTS) {
-    const mod = await import('https://esm.sh/kokoro-js@1.2.0');
+    const mod = await import('https://esm.sh/kokoro-js@1.2.1');
     KokoroTTS = mod.KokoroTTS;
   }
 
@@ -338,11 +224,11 @@ async function loadTTS() {
   const progBar   = document.getElementById('prog-bar');
   const progLabel = document.getElementById('prog-label');
   progWrap.style.display = 'flex';
-  setStatus('Downloading Kokoro model (~87 MB, cached after first load)…');
+  setStatus('Downloading Kokoro model (~45 MB, cached after first use)…');
 
   try {
-    _tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0', {
-      dtype: 'q8',
+    _tts = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
+      dtype: 'q4',
       progress_callback: (p) => {
         if (p.status === 'downloading') {
           const pct = p.total ? Math.round((p.loaded / p.total) * 100) : 0;
@@ -357,15 +243,7 @@ async function loadTTS() {
     });
   } catch (e) {
     progWrap.style.display = 'none';
-    const isAuth = /unauthorized|403|401/i.test(e.message);
-    if (isAuth) {
-      setStatus(
-        'Auth failed. Make sure you accepted model terms at hf.co/onnx-community/Kokoro-82M-v1.0 and your token has read access.',
-        'err'
-      );
-    } else {
-      setStatus('Kokoro load error: ' + e.message, 'err');
-    }
+    setStatus('Kokoro load error: ' + e.message, 'err');
     throw e;
   }
 
@@ -658,7 +536,7 @@ function setBtns(state) {
   } else if (state==='paused') {
     s.disabled=true;  p.disabled=false; p.textContent='▶ Resume'; x.disabled=false;
   } else {
-    s.disabled = !_chunks.length || !localStorage.getItem('hf_token');
+    s.disabled = !_chunks.length;
     p.disabled=true; x.disabled=true;
   }
 }
@@ -719,9 +597,8 @@ async function preparePDF() {
   _pdfClickOff = () => viewer.removeEventListener('click', handler);
 
   const refNote = refFound ? ' (references skipped)' : '';
-  const hasToken = !!localStorage.getItem('hf_token');
   setStatus(
-    `${_chunks.length} segments · pages ${sp}–${epC}${refNote}. ${hasToken ? 'Click ▶ Start or any paragraph.' : 'Add HF token above to start.'}`,
+    `${_chunks.length} segments · pages ${sp}–${epC}${refNote}. Click ▶ Start or any paragraph.`,
     'ok'
   );
   setBtns('idle');
@@ -758,14 +635,13 @@ async function handleFile(file) {
 
 document.getElementById('btn-start').addEventListener('click', () => {
   if (!_pdfBuf) { setStatus('Upload a PDF first.'); return; }
-  if (!localStorage.getItem('hf_token')) { setStatus('Enter your HF token first.', 'err'); return; }
   stopAll(); startFrom(0);
 });
 document.getElementById('btn-pause').addEventListener('click', togglePause);
 document.getElementById('btn-stop').addEventListener('click', stopAll);
 
-// Pre-load model in background if token already stored
-if (savedToken) setTimeout(() => loadTTS().catch(()=>{}), 800);
+// Pre-warm model import in background (doesn't download yet, just resolves the module)
+setTimeout(() => import('https://esm.sh/kokoro-js@1.2.1').then(m => { KokoroTTS = m.KokoroTTS; }).catch(()=>{}), 1000);
 </script>
 </body>
 </html>
