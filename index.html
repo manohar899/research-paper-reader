@@ -245,10 +245,30 @@ import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.7.76/build/pdf.worker.min.mjs';
 
-// ── HF env — set access token BEFORE kokoro-js is imported ───────────────────
+// ── HF auth — patch fetch so ALL huggingface.co requests carry the token ─────
+// kokoro-js bundles its own copy of @huggingface/transformers, so setting
+// env.accessToken on our imported instance has no effect on kokoro's internal
+// requests. Patching window.fetch is the only reliable intercept point.
+function installHFAuthInterceptor(token) {
+  const _orig = window._hfOrigFetch || window.fetch;
+  window._hfOrigFetch = _orig;
+  window.fetch = function(input, init) {
+    init = init ? { ...init } : {};
+    const url = typeof input === 'string' ? input
+              : (input instanceof Request ? input.url : String(input));
+    if (token && url.includes('huggingface.co')) {
+      init.headers = { ...(init.headers || {}), Authorization: `Bearer ${token}` };
+    }
+    return _orig.call(this, input, init);
+  };
+}
+
 import { env } from 'https://esm.sh/@huggingface/transformers@3';
 const savedToken = localStorage.getItem('hf_token') || '';
-if (savedToken) env.accessToken = savedToken;
+if (savedToken) {
+  env.accessToken = savedToken;
+  installHFAuthInterceptor(savedToken);
+}
 
 // ── Kokoro TTS state ──────────────────────────────────────────────────────────
 let KokoroTTS  = null;
@@ -285,6 +305,7 @@ btnSave.addEventListener('click', async () => {
   }
   localStorage.setItem('hf_token', t);
   env.accessToken = t;
+  installHFAuthInterceptor(t);
   applyTokenUI(true);
   setStatus('Token saved. Loading Kokoro model in background…');
   loadTTS().catch(() => {});
@@ -295,6 +316,7 @@ tokenReset.addEventListener('click', e => {
   localStorage.removeItem('hf_token');
   tokenInput.value = '';
   env.accessToken = '';
+  installHFAuthInterceptor('');
   _tts = null; KokoroTTS = null;
   applyTokenUI(false);
 });
